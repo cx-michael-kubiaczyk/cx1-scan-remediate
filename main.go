@@ -2,6 +2,7 @@ package main
 
 import (
 	"cmp"
+	"context"
 	"crypto/tls"
 	"flag"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/cxpsemea/Cx1ClientGo"
 	"github.com/sirupsen/logrus"
@@ -52,6 +54,12 @@ func main() {
 	numTriage := flag.Int("triage", 0, "Number of results to triage, sorted by highest-priority and resultId")
 	engine := flag.String("engine", "", "Focus only on this engine (sast,sca,iac) - if blank then sort by severity + resultId")
 	sourceDir := flag.String("dir", ".", "Path to the root of the source code that was scanned, where remediation diffs will be applied")
+
+	// repo-scope (classic PAT) or Contents+Pull-requests write (fine-grained) permissions
+	githubToken := flag.String("githubToken", "", "GitHub token used to publish a pull request with the remediation changes (falls back to the GITHUB_TOKEN env var); leave blank to only apply changes locally")
+	repoFlag := flag.String("repo", "", "Target GitHub repository (owner/repo, https URL, or SSH URL) for the pull request; derived from the Checkmarx One project's repoUrl if omitted")
+	baseBranchFlag := flag.String("baseBranch", "", "Branch to open the pull request against; defaults to the repository's default branch")
+	prBranchFlag := flag.String("prBranch", "", "Name of the new branch to create for the pull request; auto-generated if omitted")
 
 	cx1client, err := Cx1ClientGo.NewClient(httpClient, logger)
 
@@ -205,11 +213,25 @@ func main() {
 		logger.Infof("Will auto-remediate top %d results", num)
 
 		finding := index[num]
-		remediate(cx1client, logger, &scan, finding, *sourceDir)
+		remediate(cx1client, logger, &scan, finding, *sourceDir, prOptions{
+			Token:      cmp.Or(*githubToken, os.Getenv("GITHUB_TOKEN")),
+			Repo:       *repoFlag,
+			BaseBranch: *baseBranchFlag,
+			Branch:     *prBranchFlag,
+		})
 	}
 }
 
-func remediate(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger, scan *Cx1ClientGo.Scan, finding resultIndex, sourceDir string) {
+// prOptions configures whether/how a pull request is published once remediation
+// diffs have been applied locally. Publishing is skipped entirely when Token is empty.
+type prOptions struct {
+	Token      string
+	Repo       string
+	BaseBranch string
+	Branch     string
+}
+
+func remediate(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger, scan *Cx1ClientGo.Scan, finding resultIndex, sourceDir string, pr prOptions) {
 	logger.Infof("AI Auto-Remediate finding: %s %s %s", finding.Engine, finding.Severity, finding.AlternateID)
 	remediationId, err := cx1client.RequestAIRemediation(scan.ScanID, scan.ProjectID, finding.Engine, finding.AlternateID)
 	if err != nil {
@@ -227,7 +249,8 @@ func remediate(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger, scan *Cx
 				logger.Errorf("Failed while retrieving remediation for %s %s finding %s: %s", finding.Severity, finding.Engine, finding.AlternateID, err)
 			} else {
 				logger.Infof("Remediation status: %+v", details)
-				applyRemediation(logger, details, sourceDir)
+				applied := applyRemediation(logger, details, sourceDir)
+				publishRemediationPR(logger, cx1client, scan, details, applied, pr)
 			}
 		}
 	}
@@ -236,7 +259,11 @@ func remediate(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger, scan *Cx
 // applyRemediation walks the AI remediation results and applies each suggested change
 // to the source tree rooted at sourceDir: file-change diffs are applied with "git apply",
 // and generated test files are written out directly since they come back as full content.
-func applyRemediation(logger *logrus.Logger, details Cx1ClientGo.AIRemediationDetails, sourceDir string) {
+// It returns the subset of files that were successfully applied/written, for use when
+// publishing a pull request.
+func applyRemediation(logger *logrus.Logger, details Cx1ClientGo.AIRemediationDetails, sourceDir string) []fileUpload {
+	var applied []fileUpload
+
 	for _, result := range details.Results {
 		if result.Data.Error != nil {
 			logger.Errorf("Remediation %s for result %s reported an error, skipping: %s", result.RemediationID, result.ResultID, *result.Data.Error)
@@ -248,6 +275,7 @@ func applyRemediation(logger *logrus.Logger, details Cx1ClientGo.AIRemediationDe
 				logger.Errorf("Failed to apply change to %s: %s", fc.FilePath, err)
 			} else {
 				logger.Infof("Applied change to %s", fc.FilePath)
+				applied = append(applied, fileUpload{Path: fc.FilePath, AbsPath: filepath.Join(sourceDir, fc.FilePath)})
 			}
 		}
 
@@ -256,9 +284,129 @@ func applyRemediation(logger *logrus.Logger, details Cx1ClientGo.AIRemediationDe
 				logger.Errorf("Failed to write generated test file %s: %s", tf.FilePath, err)
 			} else {
 				logger.Infof("Wrote generated test file %s", tf.FilePath)
+				applied = append(applied, fileUpload{Path: tf.FilePath, AbsPath: filepath.Join(sourceDir, tf.FilePath)})
 			}
 		}
 	}
+
+	return applied
+}
+
+// publishRemediationPR opens a GitHub pull request containing exactly the files that
+// were successfully applied by applyRemediation. It is a no-op (besides an info log)
+// if no GitHub token is configured, so local-only usage is unaffected.
+func publishRemediationPR(logger *logrus.Logger, cx1client *Cx1ClientGo.Cx1Client, scan *Cx1ClientGo.Scan, details Cx1ClientGo.AIRemediationDetails, applied []fileUpload, pr prOptions) {
+	if pr.Token == "" {
+		logger.Info("No GitHub token configured (-githubToken or GITHUB_TOKEN); skipping pull request creation")
+		return
+	}
+	if len(applied) == 0 {
+		logger.Info("No files were successfully applied; skipping pull request creation")
+		return
+	}
+	if len(details.Results) == 0 {
+		logger.Info("No remediation results to publish; skipping pull request creation")
+		return
+	}
+
+	repoRef := pr.Repo
+	if repoRef == "" {
+		project, err := cx1client.GetProjectByID(scan.ProjectID)
+		if err != nil {
+			logger.Errorf("Failed to look up project %s to determine its repository: %s", scan.ProjectID, err)
+			return
+		}
+		if project.RepoUrl == "" {
+			logger.Error("Project has no repoUrl configured in Checkmarx One and -repo was not provided; skipping pull request creation")
+			return
+		}
+		repoRef = project.RepoUrl
+	}
+
+	host, owner, repo, err := parseOwnerRepo(repoRef)
+	if err != nil {
+		logger.Errorf("Failed to parse repository reference %q: %s", repoRef, err)
+		return
+	}
+
+	client, err := newGithubClient(pr.Token, host)
+	if err != nil {
+		logger.Errorf("Failed to create GitHub client: %s", err)
+		return
+	}
+
+	result := details.Results[0]
+
+	branch := pr.Branch
+	if branch == "" {
+		branch = fmt.Sprintf("cx1-remediate/%s-%d", sanitizeBranchComponent(result.ResultID), time.Now().Unix())
+	}
+
+	title := cmp.Or(result.Data.PRTitle, result.Data.Summary, "Checkmarx One AI remediation")
+
+	htmlURL, err := publishPR(context.Background(), client, owner, repo, prPublishOptions{
+		BaseBranch:    pr.BaseBranch,
+		NewBranch:     branch,
+		CommitMessage: title,
+		PRTitle:       title,
+		PRBody:        buildPRBody(result),
+		Files:         applied,
+	})
+	if err != nil {
+		logger.Errorf("Failed to publish pull request: %s", err)
+		return
+	}
+
+	logger.Infof("Created pull request: %s", htmlURL)
+}
+
+// buildPRBody turns the remediation's analysis and file changes into a PR description.
+func buildPRBody(result Cx1ClientGo.AIRemediationResult) string {
+	var b strings.Builder
+
+	fmt.Fprintf(&b, "%s\n\n", result.Data.Summary)
+	fmt.Fprintf(&b, "**What:** %s\n\n", result.Data.Analysis.What)
+	fmt.Fprintf(&b, "**Why:** %s\n\n", result.Data.Analysis.Why)
+	fmt.Fprintf(&b, "**How:** %s\n\n", result.Data.Analysis.How)
+
+	if len(result.Data.FileChanges) > 0 {
+		b.WriteString("**Files changed:**\n")
+		for _, fc := range result.Data.FileChanges {
+			fmt.Fprintf(&b, "- `%s`: %s\n", fc.FilePath, fc.Analysis)
+		}
+		b.WriteString("\n")
+	}
+
+	if len(result.Data.TestCreation.TestFiles) > 0 {
+		b.WriteString("**Tests added:**\n")
+		for _, tf := range result.Data.TestCreation.TestFiles {
+			fmt.Fprintf(&b, "- `%s`\n", tf.FilePath)
+		}
+		b.WriteString("\n")
+	}
+
+	fmt.Fprintf(&b, "---\n_Generated by Checkmarx One AI Remediation (remediation ID: %s)._\n", result.RemediationID)
+
+	return b.String()
+}
+
+// sanitizeBranchComponent keeps a result/resultID usable as part of a git branch name.
+func sanitizeBranchComponent(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('-')
+		}
+	}
+
+	out := b.String()
+	if len(out) > 20 {
+		out = out[:20]
+	}
+	return out
 }
 
 // applyFileDiff writes the unified diff to a temp file and applies it with "git apply",
@@ -273,8 +421,7 @@ func applyFileDiff(sourceDir string, fc Cx1ClientGo.AIRemediationFileChange) err
 	if err != nil {
 		return fmt.Errorf("failed to create temp patch file: %w", err)
 	}
-	//defer os.Remove(patchFile.Name())
-	fmt.Println("Patch file is at:", patchFile.Name())
+	defer os.Remove(patchFile.Name())
 
 	if _, err := patchFile.WriteString(fc.Diff); err != nil {
 		patchFile.Close()

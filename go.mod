@@ -4,6 +4,7 @@ go 1.26.3
 
 require (
 	github.com/cxpsemea/Cx1ClientGo v0.1.67
+	github.com/google/go-github/v92 v92.0.0
 	github.com/sirupsen/logrus v1.9.4
 	github.com/t-tomalak/logrus-easy-formatter v0.0.0-20190827215021-c074f06c5816
 )
