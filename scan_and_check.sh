@@ -5,7 +5,7 @@ curl -L https://github.com/Checkmarx/ast-cli/releases/latest/download/ast-cli_li
 cd $curdir
 /tmp/cx scan create --project-name "$PROJECT_NAME" -s . --branch "$BRANCH" --base-uri "$CX1_URL" --base-auth-uri "$IAM_URL" --tenant "$CX1_TENANT" --client-id "$CX1_CLIENT" --client-secret "$CX1_SECRET" --threshold "sast-critical=1;sast-high=1" --scan-types sast --report-format json  || { 
     echo "Threshold exceeded"; 
-    curl -L https://github.com/cx-michael-kubiaczyk/cx1-scan-remediate/releases/download/v0.0.4/cx1scanremediate -o /tmp/cx1scanremediate 
+    curl -L https://github.com/cx-michael-kubiaczyk/cx1-scan-remediate/releases/download/v0.0.5/cx1scanremediate -o /tmp/cx1scanremediate 
     chmod +x /tmp/cx1scanremediate
     extra_args=""
     if [ -n "$CX1SR_PROXY" ]; then
