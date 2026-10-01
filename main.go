@@ -435,7 +435,12 @@ func applyFileDiff(sourceDir string, fc Cx1ClientGo.AIRemediationFileChange) err
 		}
 	}()
 
-	if _, err := patchFile.WriteString(fc.Diff); err != nil {
+	diff := fc.Diff
+	if !strings.HasSuffix(diff, "\n") {
+		diff += "\n"
+	}
+
+	if _, err := patchFile.WriteString(diff); err != nil {
 		patchFile.Close()
 		return fmt.Errorf("failed to write temp patch file: %w", err)
 	}
