@@ -203,7 +203,6 @@ func main() {
 		if num > len(index) {
 			num = len(index)
 		}
-
 		//logger.Infof("Will auto-triage top %d results", num)
 		logger.Info("Auto-triage is not yet implemented and will be skipped")
 	}
@@ -212,6 +211,10 @@ func main() {
 		num := *numRemediate
 		if num > len(index) {
 			num = len(index)
+		}
+		if num > 5 {
+			num = 5
+			logger.Info("Number of auto-remediations capped at 5")
 		}
 
 		logger.Infof("Will auto-remediate top %d results (out of %d)", num, len(index))
