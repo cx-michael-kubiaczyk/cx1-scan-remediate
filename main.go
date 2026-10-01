@@ -426,7 +426,14 @@ func applyFileDiff(sourceDir string, fc Cx1ClientGo.AIRemediationFileChange) err
 	if err != nil {
 		return fmt.Errorf("failed to create temp patch file: %w", err)
 	}
-	defer os.Remove(patchFile.Name())
+
+	defer func() {
+		if os.Getenv("CX1SR_DEBUG") != "" {
+			fmt.Println("Patch file created: ", patchFile.Name())
+		} else {
+			os.Remove(patchFile.Name())
+		}
+	}()
 
 	if _, err := patchFile.WriteString(fc.Diff); err != nil {
 		patchFile.Close()
