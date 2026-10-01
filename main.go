@@ -201,7 +201,8 @@ func main() {
 			num = len(index)
 		}
 
-		logger.Infof("Will auto-triage top %d results", num)
+		//logger.Infof("Will auto-triage top %d results", num)
+		logger.Info("Auto-triage is not yet implemented and will be skipped")
 	}
 
 	if *numRemediate > 0 {
