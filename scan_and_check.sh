@@ -7,5 +7,13 @@ cd $curdir
     echo "Threshold exceeded"; 
     curl -L https://github.com/cx-michael-kubiaczyk/cx1-scan-remediate/releases/download/v0.0.4/cx1scanremediate -o /tmp/cx1scanremediate 
     chmod +x /tmp/cx1scanremediate
-    /tmp/cx1scanremediate -cx1 "$CX1_URL" -iam "$IAM_URL" -tenant "$CX1_TENANT" -client "$CX1_CLIENT" -secret "$CX1_SECRET" -remediate 1 -baseBranch "$BRANCH" -githubToken "$GH_PR_PAT" -repo "$GH_REPO_URL" -engine "sast"
+    extra_args=""
+    if [ -n "$CX1SR_PROXY" ]; then
+        extra_args="$extra_args -proxy $CX1SR_PROXY"
+    fi
+    if [ -n "$CX1SR_LOGLEVEL" ]; then
+        extra_args="$extra_args -log $CX1SR_LOGLEVEL"
+    fi
+
+    /tmp/cx1scanremediate -cx1 "$CX1_URL" -iam "$IAM_URL" -tenant "$CX1_TENANT" -client "$CX1_CLIENT" -secret "$CX1_SECRET" -remediate 1 -baseBranch "$BRANCH" -githubToken "$GH_PR_PAT" -repo "$GH_REPO_URL" -engine "sast" $extra_args
 }
