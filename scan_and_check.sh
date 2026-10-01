@@ -5,5 +5,5 @@ curl -L https://github.com/Checkmarx/ast-cli/releases/latest/download/ast-cli_li
     curl -L https://github.com/cx-michael-kubiaczyk/cx1-scan-remediate/releases/download/v0.0.1/cx1scanremediate -o cx1scanremediate 
     chmod +x cx1scanremediate
     SCAN_ID=$(grep -E '^[[:space:]]*Scan ID:' log.txt | sed -E 's/^[[:space:]]*Scan ID:[[:space:]]*//') 
-    ./cx1scanremediate -cx1 "$CX1_URL" -iam "$IAM_URL" -tenant "$CX1_TENANT" -client "$CX1_CLIENT" -secret "$CX1_SECRET" -scanId "$SCAN_ID" -remediate 1 -baseBranch "$BRANCH" -githubToken "$GH_PR_PAT" -repo "$GH_REPO"
+    ./cx1scanremediate -cx1 "$CX1_URL" -iam "$IAM_URL" -tenant "$CX1_TENANT" -client "$CX1_CLIENT" -secret "$CX1_SECRET" -scanId "$SCAN_ID" -remediate 1 -baseBranch "$BRANCH" -githubToken "$GH_PR_PAT" -repo "$GH_REPO_URL"
 }
