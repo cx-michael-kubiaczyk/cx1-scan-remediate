@@ -19,7 +19,7 @@ At this point a developer can review the PR, merge to main, and trigger the pipe
 For easy testing, the scan_and_check.sh script is available on this repo and could be triggered directly from a pipeline, for example:
 ```
 curl -L https://raw.githubusercontent.com/cx-michael-kubiaczyk/cx1-scan-remediate/refs/heads/main/scan_and_check.sh -o /tmp/scan_and_check.sh && \
-  chmod +x /tmp/scan_and_check.sh &&
+  chmod +x /tmp/scan_and_check.sh && \
   /tmp/scan_and_check.sh
 ```
 
