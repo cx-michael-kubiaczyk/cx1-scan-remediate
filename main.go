@@ -21,9 +21,11 @@ import (
 )
 
 type resultIndex struct {
-	Engine      string
-	Severity    string
-	AlternateID string
+	Engine       string
+	Severity     string
+	AlternateID  string
+	SimilarityID string
+	State        string
 }
 
 func main() {
@@ -150,9 +152,11 @@ func main() {
 	if inScope.SAST {
 		for _, r := range results.SAST {
 			index[counter] = resultIndex{
-				Engine:      "sast",
-				Severity:    r.Severity,
-				AlternateID: r.AlternateID,
+				Engine:       "sast",
+				Severity:     r.Severity,
+				AlternateID:  r.AlternateID,
+				State:        r.State,
+				SimilarityID: r.SimilarityID,
 			}
 			counter++
 		}
@@ -161,9 +165,11 @@ func main() {
 	if inScope.IAC {
 		for _, r := range results.IAC {
 			index[counter] = resultIndex{
-				Engine:      "iac",
-				Severity:    r.Severity,
-				AlternateID: r.AlternateID,
+				Engine:       "iac",
+				Severity:     r.Severity,
+				AlternateID:  r.AlternateID,
+				State:        r.State,
+				SimilarityID: r.SimilarityID,
 			}
 			counter++
 		}
@@ -172,9 +178,11 @@ func main() {
 	if inScope.SCA {
 		for _, r := range results.SCA {
 			index[counter] = resultIndex{
-				Engine:      "sca",
-				Severity:    r.Severity,
-				AlternateID: r.AlternateID,
+				Engine:       "sca",
+				Severity:     r.Severity,
+				AlternateID:  r.AlternateID,
+				State:        r.State,
+				SimilarityID: r.SimilarityID,
 			}
 			counter++
 		}
@@ -199,8 +207,23 @@ func main() {
 		if num > len(index) {
 			num = len(index)
 		}
-		//logger.Infof("Will auto-triage top %d results", num)
-		logger.Info("Auto-triage is not yet implemented and will be skipped")
+		if num > 5 {
+			num = 5
+			logger.Info("Number of auto-triages capped at 5")
+		}
+
+		doneCount := 0
+
+		for i := 0; i < len(index); i++ {
+			finding := &index[i]
+			if finding.State == "TO_VERIFY" {
+				triage(cx1client, logger, &scan, finding)
+				doneCount++
+				if doneCount >= num {
+					break
+				}
+			}
+		}
 	}
 
 	if *numRemediate > 0 {
@@ -215,14 +238,45 @@ func main() {
 
 		logger.Infof("Will auto-remediate top %d results (out of %d)", num, len(index))
 
-		for i := 0; i < num; i++ {
-			finding := index[num]
-			remediate(cx1client, logger, &scan, finding, *sourceDir, prOptions{
-				Token:      cmp.Or(*githubToken, os.Getenv("GITHUB_TOKEN")),
-				Repo:       *repoFlag,
-				BaseBranch: *baseBranchFlag,
-				Branch:     *prBranchFlag,
-			})
+		doneCount := 0
+		for i := 0; i < len(index); i++ {
+			finding := &index[num]
+			if finding.State != "NOT_EXPLOITABLE" && finding.State != "PROPOSED_NOT_EXPLOITABLE" {
+				remediate(cx1client, logger, &scan, finding, *sourceDir, prOptions{
+					Token:      cmp.Or(*githubToken, os.Getenv("GITHUB_TOKEN")),
+					Repo:       *repoFlag,
+					BaseBranch: *baseBranchFlag,
+					Branch:     *prBranchFlag,
+				})
+				doneCount++
+				if doneCount >= num {
+					break
+				}
+			}
+		}
+	}
+}
+
+func triage(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger, scan *Cx1ClientGo.Scan, finding *resultIndex) {
+	logger.Infof("AI Auto-Triage finding: %s %s %s", finding.Engine, finding.Severity, finding.AlternateID)
+	triageId, err := cx1client.RequestAITriage(scan.ScanID, "sast", finding.AlternateID)
+	if err != nil {
+		logger.Errorf("Failed to request triage: %s", err)
+	}
+	logger.Infof("AI Triage request ID: %s", triageId)
+
+	status, err := cx1client.PollAITriageStatus(scan.ProjectID, "sast", finding.SimilarityID)
+	if err != nil {
+		logger.Errorf("Failed while polling AI Triage: %s", err)
+	} else {
+		logger.Infof("AI Triage finished with status: %s", status)
+		details, err := cx1client.GetAITriageDetails(scan.ProjectID, finding.SimilarityID)
+		if err != nil {
+			logger.Errorf("Failed to get AI Triage results: %s", err)
+		} else {
+			logger.Infof("AI Triage results: %+v", details)
+			finding.State = details.TriageStatus
+			return
 		}
 	}
 }
@@ -236,7 +290,7 @@ type prOptions struct {
 	Branch     string
 }
 
-func remediate(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger, scan *Cx1ClientGo.Scan, finding resultIndex, sourceDir string, pr prOptions) {
+func remediate(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger, scan *Cx1ClientGo.Scan, finding *resultIndex, sourceDir string, pr prOptions) {
 	logger.Infof("AI Auto-Remediate finding: %s %s %s", finding.Engine, finding.Severity, finding.AlternateID)
 	remediationId, err := cx1client.RequestAIRemediation(scan.ScanID, scan.ProjectID, finding.Engine, finding.AlternateID)
 	if err != nil {
