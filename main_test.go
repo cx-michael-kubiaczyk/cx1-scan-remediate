@@ -15,6 +15,18 @@ func TestClampBatchSize(t *testing.T) {
 	}
 }
 
+func TestParseSeverities(t *testing.T) {
+	got, err := parseSeverities(" critical, High,,")
+	if err != nil || len(got) != 2 || !got["CRITICAL"] || !got["HIGH"] {
+		t.Errorf("got %v, %v", got, err)
+	}
+	for _, bad := range []string{"", " , ", "HIGH,URGENT"} {
+		if _, err := parseSeverities(bad); err == nil {
+			t.Errorf("parseSeverities(%q) should fail", bad)
+		}
+	}
+}
+
 func TestPickFindings(t *testing.T) {
 	index := []resultIndex{
 		{AlternateID: "a", State: "TO_VERIFY"},

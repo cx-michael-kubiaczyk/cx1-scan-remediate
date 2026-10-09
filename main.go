@@ -44,6 +44,7 @@ func main() {
 	triageBatch := flag.Int("triageBatch", maxAIBatchSize, fmt.Sprintf("Number of results submitted to AI Triage together in one request (1-%d)", maxAIBatchSize))
 	remediationBatch := flag.Int("remediationBatch", maxAIBatchSize, fmt.Sprintf("Number of results submitted to AI Remediation together in one request (1-%d)", maxAIBatchSize))
 	engines := flag.String("engine", "sast,sca", "Focus only on these engines - comma separated listfrom: sast,sca")
+	severity := flag.String("severity", "CRITICAL,HIGH", "Focus only on results of these severities - comma separated list from: CRITICAL,HIGH,MEDIUM,LOW,INFO")
 	sourceDir := flag.String("dir", ".", "Path to the root of the source code that was scanned, used as the base that remediation diffs are applied to in memory (never modified)")
 
 	// repo-scope (classic PAT) or Contents+Pull-requests write (fine-grained) permissions
@@ -101,6 +102,11 @@ func main() {
 		logger.Info("Log level set to default: INFO")
 	}
 
+	severities, err := parseSeverities(*severity)
+	if err != nil {
+		logger.Fatalf("Invalid -severity: %s", err)
+	}
+
 	var scan Cx1ClientGo.Scan
 
 	data, err := os.ReadFile(*resultsFile)
@@ -142,13 +148,25 @@ func main() {
 	}
 
 	if inScope.SAST {
-		inScopeCount += len(results.SAST)
+		for _, r := range results.SAST {
+			if severities[r.Severity] {
+				inScopeCount++
+			}
+		}
 	}
 	if inScope.IAC {
-		inScopeCount += len(results.IAC)
+		for _, r := range results.IAC {
+			if severities[r.Severity] {
+				inScopeCount++
+			}
+		}
 	}
 	if inScope.SCA {
-		inScopeCount += len(results.SCA)
+		for _, r := range results.SCA {
+			if severities[r.Severity] {
+				inScopeCount++
+			}
+		}
 	}
 
 	if inScopeCount == 0 {
@@ -163,6 +181,9 @@ func main() {
 	counter := 0
 	if inScope.SAST {
 		for _, r := range results.SAST {
+			if !severities[r.Severity] {
+				continue
+			}
 			index[counter] = resultIndex{
 				Engine:       "sast",
 				Severity:     r.Severity,
@@ -176,6 +197,9 @@ func main() {
 
 	if inScope.IAC {
 		for _, r := range results.IAC {
+			if !severities[r.Severity] {
+				continue
+			}
 			index[counter] = resultIndex{
 				Engine:       "iac",
 				Severity:     r.Severity,
@@ -189,6 +213,9 @@ func main() {
 
 	if inScope.SCA {
 		for _, r := range results.SCA {
+			if !severities[r.Severity] {
+				continue
+			}
 			index[counter] = resultIndex{
 				Engine:       "sca",
 				Severity:     r.Severity,
@@ -500,6 +527,25 @@ var sevmap = map[string]int{
 	"MEDIUM":   2,
 	"LOW":      3,
 	"INFO":     4,
+}
+
+// parseSeverities turns a comma-separated severity list (case-insensitive) into a set of backend severity values.
+func parseSeverities(list string) (map[string]bool, error) {
+	set := map[string]bool{}
+	for _, s := range strings.Split(list, ",") {
+		s = strings.ToUpper(strings.TrimSpace(s))
+		if s == "" {
+			continue
+		}
+		if _, ok := sevmap[s]; !ok {
+			return nil, fmt.Errorf("unknown severity %q, expected any of CRITICAL,HIGH,MEDIUM,LOW,INFO", s)
+		}
+		set[s] = true
+	}
+	if len(set) == 0 {
+		return nil, fmt.Errorf("no severities specified")
+	}
+	return set, nil
 }
 
 // prioritize findings by highest-severity first
