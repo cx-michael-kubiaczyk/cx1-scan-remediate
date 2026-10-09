@@ -5,18 +5,10 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/url"
-	"os"
 	"strings"
 
 	"github.com/google/go-github/v92/github"
 )
-
-// fileUpload is one file to add to the new commit: Path is where it lives in the repo
-// (forward-slash, relative), AbsPath is where to read its final bytes from on disk.
-type fileUpload struct {
-	Path    string
-	AbsPath string
-}
 
 // prPublishOptions describes the branch/commit/PR to create. BaseBranch may be left
 // empty to use the repository's default branch.
@@ -26,7 +18,7 @@ type prPublishOptions struct {
 	CommitMessage string
 	PRTitle       string
 	PRBody        string
-	Files         []fileUpload
+	Files         []patchedFile
 }
 
 // newGithubClient builds a go-github client authenticated with token. host is the
@@ -79,7 +71,8 @@ func parseOwnerRepo(repoURLOrSlug string) (host, owner, repo string, err error) 
 	return host, parts[0], parts[1], nil
 }
 
-// publishPR builds a single commit containing just opts.Files (read from local disk),
+// publishPR builds a single commit containing just opts.Files (taken from memory, so the
+// local source tree is not involved),
 // pushes it to a new branch created directly via the Git Data API, and opens a pull
 // request for it - no local git clone, history, or push credentials required.
 func publishPR(ctx context.Context, client *github.Client, owner, repo string, opts prPublishOptions) (string, error) {
@@ -113,12 +106,7 @@ func publishPR(ctx context.Context, client *github.Client, owner, repo string, o
 
 	entries := make([]*github.TreeEntry, 0, len(opts.Files))
 	for _, f := range opts.Files {
-		content, err := os.ReadFile(f.AbsPath)
-		if err != nil {
-			return "", fmt.Errorf("failed to read %s: %w", f.AbsPath, err)
-		}
-
-		encoded := base64.StdEncoding.EncodeToString(content)
+		encoded := base64.StdEncoding.EncodeToString(f.Content)
 		blob, _, err := client.Git.CreateBlob(ctx, owner, repo, github.Blob{
 			Content:  new(encoded),
 			Encoding: new("base64"),
