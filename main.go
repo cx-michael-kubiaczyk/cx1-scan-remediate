@@ -23,7 +23,20 @@ type resultIndex struct {
 	Severity     string
 	AlternateID  string
 	SimilarityID string
-	State        string
+	// PackageID is the SCA package identifier; only set for SCA results.
+	PackageID string
+	State     string
+	// Result is the originating results.SAST / IAC / SCA entry, kept for its String() in log output.
+	Result fmt.Stringer
+}
+
+// String describes the finding using the underlying result's own String(), falling back to the
+// basic identifiers if no result is attached.
+func (r resultIndex) String() string {
+	if r.Result != nil {
+		return r.Result.String()
+	}
+	return fmt.Sprintf("No linked result for %s %s %s", r.Engine, r.Severity, r.AlternateID)
 }
 
 func main() {
@@ -147,6 +160,8 @@ func main() {
 		}
 	}
 
+	logger.Infof("Scan has %d SAST and %d SCA", len(results.SAST), len(results.SCA))
+
 	if inScope.SAST {
 		for _, r := range results.SAST {
 			if severities[r.Severity] {
@@ -190,6 +205,7 @@ func main() {
 				AlternateID:  r.AlternateID,
 				State:        r.State,
 				SimilarityID: r.SimilarityID,
+				Result:       r,
 			}
 			counter++
 		}
@@ -206,6 +222,7 @@ func main() {
 				AlternateID:  r.AlternateID,
 				State:        r.State,
 				SimilarityID: r.SimilarityID,
+				Result:       r,
 			}
 			counter++
 		}
@@ -222,6 +239,8 @@ func main() {
 				AlternateID:  r.AlternateID,
 				State:        r.State,
 				SimilarityID: r.SimilarityID,
+				Result:       r,
+				PackageID:    r.Data.PackageIdentifier,
 			}
 			counter++
 		}
@@ -321,7 +340,7 @@ func toBuckets(findings []*resultIndex) []Cx1ClientGo.AIRequestBucket {
 // in turn. The jobs run concurrently on the platform, so only the first wait is long.
 func triageBatchOf(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger, scan *Cx1ClientGo.Scan, batch []*resultIndex) {
 	for _, finding := range batch {
-		logger.Infof("AI Auto-Triage finding: %s %s %s", finding.Engine, finding.Severity, finding.AlternateID)
+		logger.Infof("AI Auto-Triage %s finding: %s", finding.Severity, finding)
 	}
 
 	triageId, err := cx1client.RequestAITriages(scan.ScanID, toBuckets(batch))
@@ -332,20 +351,40 @@ func triageBatchOf(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger, scan
 	logger.Infof("AI Triage request ID: %s", triageId)
 
 	for _, finding := range batch {
-		status, err := cx1client.PollAITriageStatus(scan.ProjectID, finding.Engine, finding.SimilarityID)
+		var status string
+		var err error
+		if finding.Engine == "sca" {
+			status, err = cx1client.PollSCAAITriageStatus(scan.ProjectID, finding.SimilarityID, finding.PackageID)
+		} else {
+			status, err = cx1client.PollSASTAITriageStatus(scan.ProjectID, finding.SimilarityID)
+		}
 		if err != nil {
 			// the job may have already finished while an earlier finding in the batch was being polled
-			logger.Warnf("Failed while polling AI Triage for %s (%s); trying to fetch the result anyway", finding.AlternateID, err)
+			logger.Warnf("Failed while polling AI Triage for %s (%s); trying to fetch the result anyway", finding, err)
 		} else {
-			logger.Infof("AI Triage for %s finished with status: %s", finding.AlternateID, status)
+			logger.Infof("AI Triage for %s finished with status: %s", finding, status)
 		}
 
-		details, err := cx1client.GetAITriageDetails(scan.ProjectID, finding.SimilarityID)
-		if err != nil {
-			logger.Errorf("Failed to get AI Triage results for %s: %s", finding.AlternateID, err)
+		if finding.Engine == "sca" {
+			details, err := cx1client.GetSCAAITriage(scan.ScanID, scan.ProjectID, finding.SimilarityID, finding.PackageID)
+			if err != nil {
+				logger.Errorf("Failed to get AI Triage results for %s: %s", finding, err)
+				continue
+			}
+			logger.Infof("AI Triage results: %+v", details.Analysis.Exploitability.Status)
+			// an empty status means the triage has not completed, so leave the state as-is
+			if status := details.Analysis.Exploitability.Status; status != "" {
+				finding.State = status
+			}
 			continue
 		}
-		logger.Infof("AI Triage results: %+v", details)
+
+		details, err := cx1client.GetSASTAITriage(scan.ProjectID, finding.SimilarityID)
+		if err != nil {
+			logger.Errorf("Failed to get AI Triage results for %s: %s", finding, err)
+			continue
+		}
+		logger.Infof("AI Triage results: %+v", details.TriageStatus)
 		finding.State = details.TriageStatus
 	}
 }
@@ -370,7 +409,7 @@ type prOptions struct {
 // with one another. The source tree is never modified.
 func remediateBatchOf(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger, scan *Cx1ClientGo.Scan, batch []*resultIndex, sourceDir string, pr prOptions) {
 	for _, finding := range batch {
-		logger.Infof("AI Auto-Remediate finding: %s %s %s", finding.Engine, finding.Severity, finding.AlternateID)
+		logger.Infof("AI Auto-Remediate finding: %s", finding)
 	}
 
 	remediationId, err := cx1client.RequestAIRemediations(scan.ScanID, scan.ProjectID, toBuckets(batch))
@@ -384,21 +423,20 @@ func remediateBatchOf(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger, s
 		status, err := cx1client.PollAIRemediationStatus(scan.ScanID, finding.Engine, finding.AlternateID)
 		if err != nil {
 			// the job may have already finished while an earlier finding in the batch was being polled
-			logger.Warnf("Failed while polling remediation for %s (%s); trying to fetch the result anyway", finding.AlternateID, err)
+			logger.Warnf("Failed while polling remediation for %s (%s); trying to fetch the result anyway", finding, err)
 		} else {
-			logger.Tracef("Remediation for %s finished with status: %s", finding.AlternateID, status)
+			logger.Tracef("Remediation for %s finished with status: %s", finding, status)
 		}
 
 		details, err := cx1client.GetAIRemediationDetails(scan.ScanID, finding.AlternateID)
 		if err != nil {
-			logger.Errorf("Failed while retrieving remediation for %s %s finding %s: %s", finding.Severity, finding.Engine, finding.AlternateID, err)
+			logger.Errorf("Failed while retrieving remediation for %s %s finding %s: %s", finding.Severity, finding.Engine, finding, err)
 			continue
 		}
-		logger.Infof("Remediation status: %+v", details)
 
 		changes, err := applyRemediationInMemory(logger, details, sourceDir)
 		if err != nil {
-			logger.Errorf("Skipping remediation for %s %s finding %s: %s", finding.Severity, finding.Engine, finding.AlternateID, err)
+			logger.Errorf("Skipping remediation for %s %s finding %s: %s", finding.Severity, finding.Engine, finding, err)
 			continue
 		}
 

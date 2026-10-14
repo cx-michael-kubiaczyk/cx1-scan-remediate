@@ -16,3 +16,5 @@ require (
 	golang.org/x/exp v0.0.0-20260611194520-c48552f49976 // indirect
 	golang.org/x/sys v0.45.0 // indirect
 )
+
+replace github.com/cxpsemea/Cx1ClientGo => c:/work/code/cx1clientgo
