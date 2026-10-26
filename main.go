@@ -271,9 +271,7 @@ func main() {
 	}
 
 	if *numRemediate > 0 {
-		candidates := pickFindings(index, *numRemediate, func(f *resultIndex) bool {
-			return f.State != "NOT_EXPLOITABLE" && f.State != "PROPOSED_NOT_EXPLOITABLE"
-		})
+		candidates := pickFindings(index, *numRemediate, isVerified)
 		batchSize := clampBatchSize(logger, "remediationBatch", *remediationBatch)
 		logger.Infof("Will auto-remediate %d results (requested %d, out of %d) in batches of up to %d", len(candidates), *numRemediate, len(index), batchSize)
 
@@ -320,6 +318,12 @@ func pickFindings(index []resultIndex, limit int, eligible func(*resultIndex) bo
 		}
 	}
 	return picked
+}
+
+// isVerified reports whether a finding has been confirmed as a real issue, the only states
+// eligible for AI Remediation. To_Verify, Not_Exploitable and the like are never remediated.
+func isVerified(f *resultIndex) bool {
+	return f.State == "CONFIRMED" || f.State == "URGENT"
 }
 
 // toBuckets groups findings by engine into the request format shared by the AI endpoints.

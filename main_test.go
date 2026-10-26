@@ -79,3 +79,14 @@ func TestToBuckets(t *testing.T) {
 		}
 	}
 }
+
+func TestIsVerified(t *testing.T) {
+	for state, want := range map[string]bool{
+		"CONFIRMED": true, "URGENT": true,
+		"TO_VERIFY": false, "NOT_EXPLOITABLE": false, "PROPOSED_NOT_EXPLOITABLE": false, "": false,
+	} {
+		if got := isVerified(&resultIndex{State: state}); got != want {
+			t.Errorf("isVerified(%q) = %v, want %v", state, got, want)
+		}
+	}
+}
