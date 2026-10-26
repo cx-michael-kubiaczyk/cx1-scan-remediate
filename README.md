@@ -25,7 +25,7 @@ If their changes overlap, the second PR to be merged will show an ordinary merge
 A remediation is all-or-nothing: if any of its changes cannot be applied, no PR is created for it.
 
 ## Notes
-- By default only one finding is remediated (`-remediate 1`) and none are triaged (`-triage 0`), to avoid burning AI tokens. Both are configurable.
+- By default only one finding is triaged (`-triage 1`) and is remediated (`-remediate 1`), to avoid burning AI tokens. Both are configurable.
 - AI Triage / AI Remediation requests are sent in batches of at most 5 findings (`-triageBatch` / `-remediationBatch`). `-remediate` and `-triage` themselves are not capped, so a larger number is simply split into several batches. The batch limit of 5 is hard-coded as it is the size the AI backends are known to handle.
 - Triage runs before remediation, and its outcome is taken into account: a To_Verify finding that triage moves to Confirmed or Urgent can be remediated in the same run, while any other finding left in To_Verify (or Not_Exploitable) is not remediated.
 
