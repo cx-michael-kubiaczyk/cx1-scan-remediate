@@ -1,0 +1,38 @@
+version: 2
+
+project_name: cx1scanremediate
+
+builds:
+  - id: linux
+    main: .
+    goos: [linux]
+    goarch: [amd64]
+    binary: cx1scanremediate
+    env:
+      - CGO_ENABLED=0
+  - id: windows
+    main: .
+    goos: [windows]
+    goarch: [amd64]
+    binary: cx1scanremediate
+    env:
+      - CGO_ENABLED=0
+
+archives:
+  - id: zips
+    formats: [zip]
+    ids: [linux, windows]
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+  # Raw linux binary, published as "cx1scanremediate" (the name scan_and_check.sh downloads)
+  - id: bin-linux
+    formats: [binary]
+    ids: [linux]
+    name_template: "{{ .Binary }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+release:
+  # Attach the CI helper script to the release alongside the binaries
+  extra_files:
+    - glob: ./scan_and_check.sh
