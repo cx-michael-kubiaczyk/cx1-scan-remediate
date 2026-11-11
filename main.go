@@ -39,8 +39,46 @@ func (r resultIndex) String() string {
 	return fmt.Sprintf("No linked result for %s %s %s", r.Engine, r.Severity, r.AlternateID)
 }
 
+// Process exit codes. This tool only runs after the scan has broken the pipeline's threshold,
+// and nothing it does can clear that: AI Triage only ever proposes "Not Exploitable" (a human
+// must still confirm), and remediations are only pull requests. So a completed run is never 0.
+const (
+	exitGateFailed = 1 // ran to completion; findings above threshold remain, so the pipeline must still fail
+	exitUsage      = 2 // invalid flags (set by the flag package)
+	exitError      = 3 // an operational failure (API, patch, or pull request error), or a fatal error
+)
+
+// operationErrors counts non-fatal failures (triage, remediation, patch or PR errors) in this run.
+var operationErrors int
+
+// recordError logs a non-fatal operational failure and remembers it for the exit code.
+func recordError(logger *logrus.Logger, format string, args ...interface{}) {
+	operationErrors++
+	logger.Errorf(format, args...)
+}
+
+// exitCodeFor returns the process exit code for a run that completed: never 0.
+func exitCodeFor(operationErrors int) int {
+	if operationErrors > 0 {
+		return exitError
+	}
+	return exitGateFailed
+}
+
+// finish ends the run with a non-zero exit code so the calling pipeline still fails.
+func finish(logger *logrus.Logger) {
+	code := exitCodeFor(operationErrors)
+	if code == exitError {
+		logger.Errorf("Finished with %d error(s); exiting with code %d", operationErrors, code)
+	} else {
+		logger.Warnf("Findings above the threshold remain (AI Triage only proposes a state and remediation needs a reviewed pull request); exiting with code %d so the pipeline fails", code)
+	}
+	os.Exit(code)
+}
+
 func main() {
 	logger := logrus.New()
+	logger.ExitFunc = func(int) { os.Exit(exitError) } // logger.Fatal* => operational/fatal error
 	logger.SetLevel(logrus.TraceLevel)
 	myformatter := &easy.Formatter{}
 	myformatter.TimestampFormat = "2006-01-02 15:04:05.000"
@@ -185,8 +223,8 @@ func main() {
 	}
 
 	if inScopeCount == 0 {
-		logger.Info("No results are in scope, exiting")
-		return
+		logger.Warn("No results are in a supported engine/severity for AI Triage or Remediation; the threshold break must be resolved manually")
+		finish(logger)
 	}
 
 	logger.Infof("Parsed scan ID %s report %s: %d results found with %d in scope", scanId, *resultsFile, count, inScopeCount)
@@ -247,8 +285,8 @@ func main() {
 	}
 
 	if len(index) == 0 {
-		logger.Info("No results are in scope, exiting")
-		return
+		logger.Warn("No results are in a supported engine/severity for AI Triage or Remediation; the threshold break must be resolved manually")
+		finish(logger)
 	}
 
 	slices.SortFunc(index, func(a, b resultIndex) int {
@@ -287,6 +325,8 @@ func main() {
 			remediateBatchOf(cx1client, logger, &scan, batch, *sourceDir, pr)
 		}
 	}
+
+	finish(logger)
 }
 
 // The AI Triage / AI Remediation backends are only known to handle this many results per request.
@@ -349,7 +389,7 @@ func triageBatchOf(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger, scan
 
 	triageId, err := cx1client.RequestAITriages(scan.ScanID, toBuckets(batch))
 	if err != nil {
-		logger.Errorf("Failed to request triage: %s", err)
+		recordError(logger, "Failed to request triage: %s", err)
 		return
 	}
 	logger.Infof("AI Triage request ID: %s", triageId)
@@ -372,7 +412,7 @@ func triageBatchOf(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger, scan
 		if finding.Engine == "sca" {
 			details, err := cx1client.GetSCAAITriage(scan.ScanID, scan.ProjectID, finding.SimilarityID, finding.PackageID)
 			if err != nil {
-				logger.Errorf("Failed to get AI Triage results for %s: %s", finding, err)
+				recordError(logger, "Failed to get AI Triage results for %s: %s", finding, err)
 				continue
 			}
 			logger.Infof("AI Triage results: %+v", details.Analysis.Exploitability.Status)
@@ -385,7 +425,7 @@ func triageBatchOf(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger, scan
 
 		details, err := cx1client.GetSASTAITriage(scan.ProjectID, finding.SimilarityID)
 		if err != nil {
-			logger.Errorf("Failed to get AI Triage results for %s: %s", finding, err)
+			recordError(logger, "Failed to get AI Triage results for %s: %s", finding, err)
 			continue
 		}
 		logger.Infof("AI Triage results: %+v", details.TriageStatus)
@@ -418,7 +458,7 @@ func remediateBatchOf(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger, s
 
 	remediationId, err := cx1client.RequestAIRemediations(scan.ScanID, scan.ProjectID, toBuckets(batch))
 	if err != nil {
-		logger.Errorf("Failed to request remediation: %s", err)
+		recordError(logger, "Failed to request remediation: %s", err)
 		return
 	}
 	logger.Tracef("Requested remediation id: %s", remediationId)
@@ -434,13 +474,13 @@ func remediateBatchOf(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger, s
 
 		details, err := cx1client.GetAIRemediationDetails(scan.ScanID, finding.AlternateID)
 		if err != nil {
-			logger.Errorf("Failed while retrieving remediation for %s %s finding %s: %s", finding.Severity, finding.Engine, finding, err)
+			recordError(logger, "Failed while retrieving remediation for %s %s finding %s: %s", finding.Severity, finding.Engine, finding, err)
 			continue
 		}
 
 		changes, err := applyRemediationInMemory(logger, details, sourceDir)
 		if err != nil {
-			logger.Errorf("Skipping remediation for %s %s finding %s: %s", finding.Severity, finding.Engine, finding, err)
+			recordError(logger, "Skipping remediation for %s %s finding %s: %s", finding.Severity, finding.Engine, finding, err)
 			continue
 		}
 
@@ -464,11 +504,11 @@ func publishRemediationPR(logger *logrus.Logger, cx1client *Cx1ClientGo.Cx1Clien
 	if repoRef == "" {
 		project, err := cx1client.GetProjectByID(scan.ProjectID)
 		if err != nil {
-			logger.Errorf("Failed to look up project %s to determine its repository: %s", scan.ProjectID, err)
+			recordError(logger, "Failed to look up project %s to determine its repository: %s", scan.ProjectID, err)
 			return
 		}
 		if project.RepoUrl == "" {
-			logger.Error("Project has no repoUrl configured in Checkmarx One and -repo was not provided; skipping pull request creation")
+			recordError(logger, "Project has no repoUrl configured in Checkmarx One and -repo was not provided; skipping pull request creation")
 			return
 		}
 		repoRef = project.RepoUrl
@@ -476,13 +516,13 @@ func publishRemediationPR(logger *logrus.Logger, cx1client *Cx1ClientGo.Cx1Clien
 
 	host, owner, repo, err := parseOwnerRepo(repoRef)
 	if err != nil {
-		logger.Errorf("Failed to parse repository reference %q: %s", repoRef, err)
+		recordError(logger, "Failed to parse repository reference %q: %s", repoRef, err)
 		return
 	}
 
 	client, err := newGithubClient(pr.Token, host)
 	if err != nil {
-		logger.Errorf("Failed to create GitHub client: %s", err)
+		recordError(logger, "Failed to create GitHub client: %s", err)
 		return
 	}
 
@@ -507,7 +547,7 @@ func publishRemediationPR(logger *logrus.Logger, cx1client *Cx1ClientGo.Cx1Clien
 		Files:         applied,
 	})
 	if err != nil {
-		logger.Errorf("Failed to publish pull request: %s", err)
+		recordError(logger, "Failed to publish pull request: %s", err)
 		return
 	}
 
