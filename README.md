@@ -112,6 +112,12 @@ This tool is a Proof-of-Concept and has a number of limitations outlined below.
 
 ## Misc  
 ```
+  -caCert string
+        Optional: Path to a PEM file with extra CA certificate(s) to trust for calls to Cx1, e.g. the CA of a TLS-inspecting proxy; added to the system trust store
+  -insecure
+        Optional: DISABLE TLS certificate verification for calls to Cx1 (insecure; prefer -caCert)
+  -proxy string
+        Optional: Proxy server to connect to for outbound calls to Cx1
   -log string
         Log level: TRACE, DEBUG, INFO, WARNING, ERROR, FATAL (default "INFO")
   -useragent string

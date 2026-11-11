@@ -4,12 +4,14 @@ import (
 	"cmp"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"flag"
 	"fmt"
 	"net/http"
 	"net/url"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -105,17 +107,28 @@ func main() {
 	prBranchFlag := flag.String("prBranch", "", "Name of the new branch to create for the pull request; auto-generated if omitted. When remediating more than one result, each pull request's branch is this name plus a result-specific suffix")
 
 	_ = flag.String("proxy", "", "Optional: Proxy server to connect to for outbound calls to Cx1")
+	_ = flag.Bool("insecure", false, "Optional: DISABLE TLS certificate verification for calls to Cx1 (insecure; prefer -caCert)")
+	_ = flag.String("caCert", "", "Optional: Path to a PEM file with extra CA certificate(s) to trust for calls to Cx1, e.g. the CA of a TLS-inspecting proxy; added to the system trust store")
 
 	proxy := getProxy()
+	insecure := getBoolFlag("insecure")
+	caCert := getFlagValue("caCert")
 	httpClient := &http.Client{}
-	if proxy != "" {
-		proxyURL, _ := url.Parse(proxy)
-		transport := &http.Transport{}
-		transport.Proxy = http.ProxyURL(proxyURL)
-		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
-		transport.DisableKeepAlives = true
+	if proxy != "" || insecure || caCert != "" {
+		transport, err := newTransport(proxy, insecure, caCert)
+		if err != nil {
+			logger.Fatalf("Invalid proxy/TLS configuration: %s", err)
+		}
 		httpClient.Transport = transport
-		logger.Infof("Using proxy")
+		if proxy != "" {
+			logger.Infof("Using proxy")
+		}
+		if insecure {
+			logger.Warn("TLS certificate verification is DISABLED (-insecure); credentials and results can be intercepted. Prefer -caCert")
+		}
+		if caCert != "" {
+			logger.Infof("Trusting additional CA certificate(s) from %s", caCert)
+		}
 	}
 	cx1client, err := Cx1ClientGo.NewClient(httpClient, logger)
 
@@ -655,22 +668,91 @@ func sevcmp(sev1, sev2 string) int {
 }
 
 func getProxy() string {
-	for i := 0; i < len(os.Args); i++ {
-		// Match exact '-proxy' or '--proxy'
-		if os.Args[i] == "-proxy" || os.Args[i] == "--proxy" {
-			// Ensure there's a following value argument
-			if i+1 < len(os.Args) {
-				return os.Args[i+1]
-			}
-			break
+	return getFlagValue("proxy")
+}
+
+// getFlagValue reads a string flag straight from os.Args. It is needed because the HTTP
+// transport must be built before Cx1ClientGo.NewClient runs flag.Parse.
+func getFlagValue(name string) string {
+	v, _ := argValue(os.Args[1:], name)
+	return v
+}
+
+// getBoolFlag reads a boolean flag (-name, --name, -name=true) straight from os.Args. Unlike
+// value flags, a bool flag never consumes the following argument.
+func getBoolFlag(name string) bool {
+	for _, a := range os.Args[1:] {
+		trimmed := strings.TrimPrefix(strings.TrimPrefix(a, "-"), "-")
+		if trimmed == a {
+			continue
 		}
-		// Alternatively catch inline assignments like -proxy=http://...
-		if len(os.Args[i]) > 7 && os.Args[i][:7] == "-proxy=" {
-			return os.Args[i][7:]
+		if trimmed == name {
+			return true
 		}
-		if len(os.Args[i]) > 8 && os.Args[i][:8] == "--proxy=" {
-			return os.Args[i][8:]
+		if v, ok := strings.CutPrefix(trimmed, name+"="); ok {
+			b, err := strconv.ParseBool(v)
+			return err == nil && b
 		}
 	}
-	return ""
+	return false
+}
+
+// argValue finds -name value, --name value, -name=value or --name=value in args.
+func argValue(args []string, name string) (string, bool) {
+	for i, a := range args {
+		a = strings.TrimPrefix(strings.TrimPrefix(a, "-"), "-")
+		if a == args[i] {
+			continue // not a flag
+		}
+		if a == name {
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				return args[i+1], true
+			}
+			return "", true
+		}
+		if v, ok := strings.CutPrefix(a, name+"="); ok {
+			return v, true
+		}
+	}
+	return "", false
+}
+
+// newTransport builds the HTTP transport for calls to Cx1. TLS verification stays on unless
+// insecure is set; caCertFile adds extra trusted CAs (e.g. a TLS-inspecting proxy's) to the
+// system pool.
+func newTransport(proxy string, insecure bool, caCertFile string) (*http.Transport, error) {
+	if insecure && caCertFile != "" {
+		return nil, fmt.Errorf("-insecure and -caCert are mutually exclusive")
+	}
+
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+
+	if proxy != "" {
+		proxyURL, err := url.Parse(proxy)
+		if err != nil || proxyURL.Scheme == "" || proxyURL.Host == "" {
+			return nil, fmt.Errorf("invalid -proxy %q: expected a URL such as http://host:port", proxy)
+		}
+		transport.Proxy = http.ProxyURL(proxyURL)
+		transport.DisableKeepAlives = true
+	}
+
+	switch {
+	case insecure:
+		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	case caCertFile != "":
+		pem, err := os.ReadFile(caCertFile)
+		if err != nil {
+			return nil, fmt.Errorf("reading -caCert: %w", err)
+		}
+		pool, err := x509.SystemCertPool()
+		if err != nil || pool == nil {
+			pool = x509.NewCertPool()
+		}
+		if !pool.AppendCertsFromPEM(pem) {
+			return nil, fmt.Errorf("-caCert %s contains no valid PEM certificates", caCertFile)
+		}
+		transport.TLSClientConfig = &tls.Config{RootCAs: pool}
+	}
+
+	return transport, nil
 }
