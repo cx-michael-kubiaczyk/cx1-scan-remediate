@@ -302,6 +302,10 @@ func main() {
 		finish(logger)
 	}
 
+	for i := range index {
+		index[i].State = resolveState(logger, "Scan report entry "+index[i].String(), index[i].State, index[i].State)
+	}
+
 	slices.SortFunc(index, func(a, b resultIndex) int {
 		sev := sevcmp(a.Severity, b.Severity)
 		if sev != 0 {
@@ -312,7 +316,7 @@ func main() {
 	})
 
 	if *numTriage > 0 {
-		candidates := pickFindings(index, *numTriage, func(f *resultIndex) bool { return f.State == "TO_VERIFY" })
+		candidates := pickFindings(index, *numTriage, func(f *resultIndex) bool { return f.State == stateToVerify })
 		batchSize := clampBatchSize(logger, "triageBatch", *triageBatch)
 		logger.Infof("Will auto-triage %d results (requested %d) in batches of up to %d", len(candidates), *numTriage, batchSize)
 
@@ -376,7 +380,7 @@ func pickFindings(index []resultIndex, limit int, eligible func(*resultIndex) bo
 // isVerified reports whether a finding has been confirmed as a real issue, the only states
 // eligible for AI Remediation. To_Verify, Not_Exploitable and the like are never remediated.
 func isVerified(f *resultIndex) bool {
-	return f.State == "CONFIRMED" || f.State == "URGENT"
+	return f.State == stateConfirmed || f.State == stateUrgent
 }
 
 // toBuckets groups findings by engine into the request format shared by the AI endpoints.
@@ -429,10 +433,8 @@ func triageBatchOf(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger, scan
 				continue
 			}
 			logger.Infof("AI Triage results: %+v", details.Analysis.Exploitability.Status)
-			// an empty status means the triage has not completed, so leave the state as-is
-			if status := details.Analysis.Exploitability.Status; status != "" {
-				finding.State = status
-			}
+			// an empty or unrecognized status leaves the state as-is (with a warning)
+			finding.State = resolveState(logger, "AI Triage of "+finding.String(), details.Analysis.Exploitability.Status, finding.State)
 			continue
 		}
 
@@ -442,7 +444,7 @@ func triageBatchOf(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger, scan
 			continue
 		}
 		logger.Infof("AI Triage results: %+v", details.TriageStatus)
-		finding.State = details.TriageStatus
+		finding.State = resolveState(logger, "AI Triage of "+finding.String(), details.TriageStatus, finding.State)
 	}
 }
 
