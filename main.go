@@ -1,11 +1,11 @@
 package main
 
 import (
-	"errors"
 	"cmp"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"flag"
 	"fmt"
 	"net/http"
@@ -481,9 +481,9 @@ func triageBatchOf(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger, scan
 				recordError(logger, "Failed to get AI Triage results for %s: %s", finding, err)
 				continue
 			}
-			logger.Infof("AI Triage results: %+v", details.Analysis.Exploitability.Status)
+			logger.Infof("AI Triage results: exploitability %s, reachability %s", details.Analysis.Exploitability.Status, details.Analysis.Reachability.Status)
 			// an empty or unrecognized status leaves the state as-is (with a warning)
-			finding.State = resolveState(logger, "AI Triage of "+finding.String(), details.Analysis.Exploitability.Status, finding.State)
+			finding.State = aiTriageState(logger, "AI Triage of "+finding.String(), details.Analysis.Exploitability.Status, details.Analysis.Reachability.Status, finding.State)
 			continue
 		}
 
@@ -492,8 +492,8 @@ func triageBatchOf(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger, scan
 			recordError(logger, "Failed to get AI Triage results for %s: %s", finding, err)
 			continue
 		}
-		logger.Infof("AI Triage results: %+v", details.TriageStatus)
-		finding.State = resolveState(logger, "AI Triage of "+finding.String(), details.TriageStatus, finding.State)
+		logger.Infof("AI Triage results: %s (reachability %s)", details.TriageStatus, details.ReachabilityStatus)
+		finding.State = aiTriageState(logger, "AI Triage of "+finding.String(), details.TriageStatus, details.ReachabilityStatus, finding.State)
 	}
 }
 

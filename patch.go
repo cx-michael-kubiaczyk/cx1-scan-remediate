@@ -41,7 +41,7 @@ func applyRemediationInMemory(logger *logrus.Logger, details Cx1ClientGo.AIRemed
 	}
 	defer func() {
 		if os.Getenv("CX1SR_DEBUG") != "" {
-			fmt.Println("Scratch directory kept: ", root)
+			logger.Infof("Scratch directory kept (CX1SR_DEBUG is set): %s", root)
 		} else {
 			os.RemoveAll(root)
 		}
