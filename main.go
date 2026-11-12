@@ -105,7 +105,7 @@ func main() {
 	githubToken := flag.String("githubToken", "", "GitHub token used to publish a pull request with the remediation changes (falls back to the GITHUB_TOKEN env var); required when using -remediate")
 	repoFlag := flag.String("repo", "", "Target GitHub repository (owner/repo, https URL, or SSH URL) for the pull request; derived from the Checkmarx One project's repoUrl if omitted")
 	baseBranchFlag := flag.String("baseBranch", "", "Branch to open the pull request against; defaults to the repository's default branch")
-	prBranchFlag := flag.String("prBranch", "", "Name of the new branch to create for the pull request; auto-generated if omitted. When remediating more than one result, each pull request's branch is this name plus a result-specific suffix")
+	prBranchFlag := flag.String("prBranch", "", "Prefix for the names of the branches created for pull requests; each branch is this prefix plus the engine and result ID (default \"cx1-remediate/\"). A finding whose branch already exists is skipped")
 
 	proxy := flag.String("proxy", "", "Optional: Proxy server (http, https or socks5 URL) for outbound calls to Cx1 and GitHub; defaults to the HTTPS_PROXY environment variable")
 	insecure := flag.Bool("insecure", false, "Optional: DISABLE TLS certificate verification for calls to Cx1 and GitHub (insecure; prefer -caCert)")
@@ -358,11 +358,36 @@ func main() {
 	}
 
 	if *numRemediate > 0 {
-		candidates := pickFindings(index, *numRemediate, isVerified)
+		// A finding whose branch already exists was remediated by an earlier run (its pull
+		// request is open, or was closed without deleting the branch), so it is skipped and
+		// the next finding takes its place.
+
+		ghClient, owner, repo, err := githubTarget(pr)
+		if err != nil {
+			recordError(logger, "Cannot check for existing branches (%s); skipping AI Remediation", err)
+			finish(logger)
+			return
+		}
+		eligible := func(f *resultIndex) bool {
+			if !isVerified(f) {
+				return false
+			}
+			branch := branchFor(pr, f)
+			exists, err := branchExists(context.Background(), ghClient, owner, repo, branch)
+			switch {
+			case err != nil:
+				recordError(logger, "Could not check whether branch %q exists for %s: %s; skipping it", branch, f, err)
+				return false
+			case exists:
+				logger.Infof("Skipping %s: branch %q already exists in %s/%s (remediated by an earlier run); delete the branch to retry", f, branch, owner, repo)
+				return false
+			}
+			return true
+		}
+
+		candidates := pickFindings(index, *numRemediate, eligible)
 		batchSize := clampBatchSize(logger, "remediationBatch", *remediationBatch)
 		logger.Infof("Will auto-remediate %d results (requested %d, out of %d) in batches of up to %d", len(candidates), *numRemediate, len(index), batchSize)
-
-		pr.BranchPerResult = len(candidates) > 1
 
 		for batch := range slices.Chunk(candidates, batchSize) {
 			if aiBudget.expired() {
@@ -497,18 +522,6 @@ func triageBatchOf(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger, scan
 	}
 }
 
-// prOptions configures how a pull request is published for each remediation.
-type prOptions struct {
-	Token      string
-	Transport  http.RoundTripper // shared with the Cx1 client, so GitHub calls honor -proxy, -insecure and -caCert
-	Repo       string
-	BaseBranch string
-	Branch     string
-	// BranchPerResult makes Branch a prefix rather than the full name, so that several
-	// pull requests created in one run do not collide on the same branch.
-	BranchPerResult bool
-}
-
 // remediateBatchOf submits the findings to AI Remediation in a single request, then waits for
 // each in turn and publishes its result. The jobs run concurrently on the platform, so only
 // the first wait is long.
@@ -555,115 +568,8 @@ func remediateBatchOf(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger, s
 			continue
 		}
 
-		publishRemediationPR(logger, cx1client, scan, details, changes, pr)
+		publishRemediationPR(logger, details, changes, pr, branchFor(pr, finding))
 	}
-}
-
-// publishRemediationPR opens a GitHub pull request containing exactly the files produced by
-// applyRemediationInMemory.
-func publishRemediationPR(logger *logrus.Logger, cx1client *Cx1ClientGo.Cx1Client, scan *Cx1ClientGo.Scan, details Cx1ClientGo.AIRemediationDetails, applied []patchedFile, pr prOptions) {
-	if len(applied) == 0 {
-		logger.Info("Remediation produced no file changes; skipping pull request creation")
-		return
-	}
-	if len(details.Results) == 0 {
-		logger.Info("No remediation results to publish; skipping pull request creation")
-		return
-	}
-
-	repoRef, err := resolveRepoRef(cx1client, scan, pr.Repo)
-	if err != nil {
-		recordError(logger, "%s; skipping pull request creation", err)
-		return
-	}
-
-	host, owner, repo, err := parseOwnerRepo(repoRef)
-	if err != nil {
-		recordError(logger, "Failed to parse repository reference %q: %s", repoRef, err)
-		return
-	}
-
-	client, err := newGithubClient(pr.Token, host, pr.Transport)
-	if err != nil {
-		recordError(logger, "Failed to create GitHub client: %s", err)
-		return
-	}
-
-	result := details.Results[0]
-
-	branch := pr.Branch
-	switch {
-	case branch == "":
-		branch = fmt.Sprintf("cx1-remediate/%s-%d", sanitizeBranchComponent(result.ResultID), time.Now().Unix())
-	case pr.BranchPerResult:
-		branch = fmt.Sprintf("%s-%s", branch, sanitizeBranchComponent(result.ResultID))
-	}
-
-	title := cmp.Or(result.Data.PRTitle, result.Data.Summary, "Checkmarx One AI remediation")
-
-	htmlURL, err := publishPR(context.Background(), client, owner, repo, prPublishOptions{
-		BaseBranch:    pr.BaseBranch,
-		NewBranch:     branch,
-		CommitMessage: title,
-		PRTitle:       title,
-		PRBody:        buildPRBody(result),
-		Files:         applied,
-	})
-	if err != nil {
-		recordError(logger, "Failed to publish pull request: %s", err)
-		return
-	}
-
-	logger.Infof("Created pull request: %s", htmlURL)
-}
-
-// buildPRBody turns the remediation's analysis and file changes into a PR description.
-func buildPRBody(result Cx1ClientGo.AIRemediationResult) string {
-	var b strings.Builder
-
-	fmt.Fprintf(&b, "%s\n\n", result.Data.Summary)
-	fmt.Fprintf(&b, "**What:** %s\n\n", result.Data.Analysis.What)
-	fmt.Fprintf(&b, "**Why:** %s\n\n", result.Data.Analysis.Why)
-	fmt.Fprintf(&b, "**How:** %s\n\n", result.Data.Analysis.How)
-
-	if len(result.Data.FileChanges) > 0 {
-		b.WriteString("**Files changed:**\n")
-		for _, fc := range result.Data.FileChanges {
-			fmt.Fprintf(&b, "- `%s`: %s\n", fc.FilePath, fc.Analysis)
-		}
-		b.WriteString("\n")
-	}
-
-	if len(result.Data.TestCreation.TestFiles) > 0 {
-		b.WriteString("**Tests added:**\n")
-		for _, tf := range result.Data.TestCreation.TestFiles {
-			fmt.Fprintf(&b, "- `%s`\n", tf.FilePath)
-		}
-		b.WriteString("\n")
-	}
-
-	fmt.Fprintf(&b, "---\n_Generated by Checkmarx One AI Remediation (remediation ID: %s)._\n", result.RemediationID)
-
-	return b.String()
-}
-
-// sanitizeBranchComponent keeps a result/resultID usable as part of a git branch name.
-func sanitizeBranchComponent(s string) string {
-	var b strings.Builder
-	for _, r := range s {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
-			b.WriteRune(r)
-		default:
-			b.WriteRune('-')
-		}
-	}
-
-	out := b.String()
-	if len(out) > 20 {
-		out = out[:20]
-	}
-	return out
 }
 
 var sevmap = map[string]int{

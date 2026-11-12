@@ -108,7 +108,7 @@ This tool is a Proof-of-Concept and has a number of limitations outlined below.
   -triageBatch int
         Number of results submitted to AI Triage together in one request (1-5) (default 5)
   -prBranch string
-        Name of the new branch to create for the pull request; auto-generated if omitted. When remediating more than one result, each pull request's branch is this name plus a result-specific suffix
+        Prefix for the names of the branches created for pull requests; each branch is this prefix plus the engine and result ID, e.g. cx1-remediate/sast-<id> (default prefix "cx1-remediate/"). A finding whose branch already exists was remediated by an earlier run and is skipped; delete the branch to retry
   -remediate int
         Number of results to remediate, sorted by highest-priority and resultId; at most 25 per run (default 1)
   -remediationBatch int
