@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestArgValue(t *testing.T) {
@@ -92,5 +93,32 @@ func TestNewTransportErrors(t *testing.T) {
 	}
 	if _, err := newTransport("proxy.corp:8080", false, ""); err == nil {
 		t.Error("expected error for proxy without a scheme")
+	}
+}
+
+func TestNewTransportResponseHeaderTimeout(t *testing.T) {
+	tr, err := newTransport("", false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr.ResponseHeaderTimeout != responseHeaderTimeout {
+		t.Errorf("ResponseHeaderTimeout = %v, want %v", tr.ResponseHeaderTimeout, responseHeaderTimeout)
+	}
+
+	// a server that accepts the request and never answers must not hang the client
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-release }))
+	defer srv.Close()
+	defer close(release)
+
+	tr.ResponseHeaderTimeout = 100 * time.Millisecond
+	start := time.Now()
+	resp, err := (&http.Client{Transport: tr}).Get(srv.URL)
+	if err == nil {
+		resp.Body.Close()
+		t.Fatal("expected a timeout error")
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Errorf("timeout took %v", time.Since(start))
 	}
 }

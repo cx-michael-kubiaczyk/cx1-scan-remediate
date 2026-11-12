@@ -67,6 +67,7 @@ chmod +x /tmp/cx1scanremediate
 set --
 if [ -n "$CX1SR_PROXY" ]; then set -- "$@" -proxy "$CX1SR_PROXY"; fi
 if [ -n "$CX1SR_LOGLEVEL" ]; then set -- "$@" -log "$CX1SR_LOGLEVEL"; fi
+if [ -n "$CX1SR_TIMEOUT" ]; then set -- "$@" -timeout "$CX1SR_TIMEOUT"; fi
 if [ -n "$insecure" ]; then set -- "$@" -insecure; fi
 if [ -n "$CX1SR_CACERT" ]; then set -- "$@" -caCert "$CX1SR_CACERT"; fi
 

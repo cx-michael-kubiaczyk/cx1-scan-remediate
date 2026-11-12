@@ -98,6 +98,7 @@ func main() {
 	remediationBatch := flag.Int("remediationBatch", maxAIBatchSize, fmt.Sprintf("Number of results submitted to AI Remediation together in one request (1-%d)", maxAIBatchSize))
 	engines := flag.String("engine", "sast,sca", "Focus only on these engines - comma separated listfrom: sast,sca")
 	severity := flag.String("severity", "CRITICAL,HIGH", "Focus only on results of these severities - comma separated list from: CRITICAL,HIGH,MEDIUM,LOW,INFO")
+	timeout := flag.Duration("timeout", 30*time.Minute, "Overall time limit for waiting on AI Triage and AI Remediation, e.g. 30m; 0 for no limit. Work that completes in time is still published as pull requests; unfinished work is abandoned and the run exits non-zero")
 	sourceDir := flag.String("dir", ".", "Path to the root of the source code that was scanned, used as the base that remediation diffs are applied to in memory (never modified)")
 
 	// repo-scope (classic PAT) or Contents+Pull-requests write (fine-grained) permissions
@@ -113,22 +114,19 @@ func main() {
 	proxy := getProxy()
 	insecure := getBoolFlag("insecure")
 	caCert := getFlagValue("caCert")
-	httpClient := &http.Client{}
-	if proxy != "" || insecure || caCert != "" {
-		transport, err := newTransport(proxy, insecure, caCert)
-		if err != nil {
-			logger.Fatalf("Invalid proxy/TLS configuration: %s", err)
-		}
-		httpClient.Transport = transport
-		if proxy != "" {
-			logger.Infof("Using proxy")
-		}
-		if insecure {
-			logger.Warn("TLS certificate verification is DISABLED (-insecure); credentials and results can be intercepted. Prefer -caCert")
-		}
-		if caCert != "" {
-			logger.Infof("Trusting additional CA certificate(s) from %s", caCert)
-		}
+	transport, err := newTransport(proxy, insecure, caCert)
+	if err != nil {
+		logger.Fatalf("Invalid proxy/TLS configuration: %s", err)
+	}
+	httpClient := &http.Client{Transport: transport}
+	if proxy != "" {
+		logger.Infof("Using proxy")
+	}
+	if insecure {
+		logger.Warn("TLS certificate verification is DISABLED (-insecure); credentials and results can be intercepted. Prefer -caCert")
+	}
+	if caCert != "" {
+		logger.Infof("Trusting additional CA certificate(s) from %s", caCert)
 	}
 	cx1client, err := Cx1ClientGo.NewClient(httpClient, logger)
 
@@ -315,13 +313,23 @@ func main() {
 		return cmp.Compare(a.AlternateID, b.AlternateID)
 	})
 
+	clientVars := cx1client.GetClientVars()
+	aiBudget := newBudget(*timeout)
+	if !aiBudget.unlimited() {
+		logger.Infof("AI Triage and Remediation share an overall time limit of %s", *timeout)
+	}
+
 	if *numTriage > 0 {
 		candidates := pickFindings(index, *numTriage, func(f *resultIndex) bool { return f.State == stateToVerify })
 		batchSize := clampBatchSize(logger, "triageBatch", *triageBatch)
 		logger.Infof("Will auto-triage %d results (requested %d) in batches of up to %d", len(candidates), *numTriage, batchSize)
 
 		for batch := range slices.Chunk(candidates, batchSize) {
-			triageBatchOf(cx1client, logger, &scan, batch)
+			if aiBudget.expired() {
+				recordError(logger, "Overall -timeout of %s reached; not submitting further AI Triage batches", *timeout)
+				break
+			}
+			triageBatchOf(cx1client, logger, &scan, batch, aiBudget, clientVars)
 		}
 	}
 
@@ -339,7 +347,11 @@ func main() {
 		}
 
 		for batch := range slices.Chunk(candidates, batchSize) {
-			remediateBatchOf(cx1client, logger, &scan, batch, *sourceDir, pr)
+			if aiBudget.expired() {
+				recordError(logger, "Overall -timeout of %s reached; not submitting further AI Remediation batches", *timeout)
+				break
+			}
+			remediateBatchOf(cx1client, logger, &scan, batch, *sourceDir, pr, aiBudget, clientVars)
 		}
 	}
 
@@ -399,7 +411,7 @@ func toBuckets(findings []*resultIndex) []Cx1ClientGo.AIRequestBucket {
 
 // triageBatchOf submits the findings to AI Triage in a single request, then waits for each
 // in turn. The jobs run concurrently on the platform, so only the first wait is long.
-func triageBatchOf(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger, scan *Cx1ClientGo.Scan, batch []*resultIndex) {
+func triageBatchOf(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger, scan *Cx1ClientGo.Scan, batch []*resultIndex, aiBudget budget, vars Cx1ClientGo.ClientVars) {
 	for _, finding := range batch {
 		logger.Infof("AI Auto-Triage %s finding: %s", finding.Severity, finding)
 	}
@@ -414,10 +426,15 @@ func triageBatchOf(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger, scan
 	for _, finding := range batch {
 		var status string
 		var err error
+		delay, max := aiBudget.pollTimeouts(vars.AIPollingDelaySeconds, vars.AIPollingMaxSeconds)
 		if finding.Engine == "sca" {
-			status, err = cx1client.PollSCAAITriageStatus(scan.ProjectID, finding.SimilarityID, finding.PackageID)
+			status, err = cx1client.PollSCAAITriageStatusWithTimeout(scan.ProjectID, finding.SimilarityID, finding.PackageID, delay, max)
 		} else {
-			status, err = cx1client.PollSASTAITriageStatus(scan.ProjectID, finding.SimilarityID)
+			status, err = cx1client.PollSASTAITriageStatusWithTimeout(scan.ProjectID, finding.SimilarityID, delay, max)
+		}
+		if err != nil && aiBudget.expired() {
+			recordError(logger, "Overall -timeout reached before AI Triage finished for %s (%s); its state is unchanged", finding, err)
+			continue
 		}
 		if err != nil {
 			// the job may have already finished while an earlier finding in the batch was being polled
@@ -466,7 +483,7 @@ type prOptions struct {
 // Every remediation is computed in memory against the untouched source tree and published as
 // its own independent pull request, so remediations that touch the same file do not interfere
 // with one another. The source tree is never modified.
-func remediateBatchOf(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger, scan *Cx1ClientGo.Scan, batch []*resultIndex, sourceDir string, pr prOptions) {
+func remediateBatchOf(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger, scan *Cx1ClientGo.Scan, batch []*resultIndex, sourceDir string, pr prOptions, aiBudget budget, vars Cx1ClientGo.ClientVars) {
 	for _, finding := range batch {
 		logger.Infof("AI Auto-Remediate finding: %s", finding)
 	}
@@ -479,7 +496,13 @@ func remediateBatchOf(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger, s
 	logger.Tracef("Requested remediation id: %s", remediationId)
 
 	for _, finding := range batch {
-		status, err := cx1client.PollAIRemediationStatus(scan.ScanID, finding.Engine, finding.AlternateID)
+		delay, max := aiBudget.pollTimeouts(vars.AIPollingDelaySeconds, vars.AIPollingMaxSeconds)
+		status, err := cx1client.PollAIRemediationStatusWithTimeout(scan.ScanID, finding.Engine, finding.AlternateID, delay, max)
+		if err != nil && aiBudget.expired() {
+			// jobs that finished earlier still get their pull request; only this unfinished one is abandoned
+			recordError(logger, "Overall -timeout reached before AI Remediation finished for %s (%s); abandoning it", finding, err)
+			continue
+		}
 		if err != nil {
 			// the job may have already finished while an earlier finding in the batch was being polled
 			logger.Warnf("Failed while polling remediation for %s (%s); trying to fetch the result anyway", finding, err)
@@ -719,6 +742,11 @@ func argValue(args []string, name string) (string, bool) {
 	return "", false
 }
 
+// responseHeaderTimeout bounds the wait for a server's response headers after the request has
+// been sent. It does not limit reading the body, so long-lived event streams are unaffected once
+// they have started.
+const responseHeaderTimeout = 120 * time.Second
+
 // newTransport builds the HTTP transport for calls to Cx1. TLS verification stays on unless
 // insecure is set; caCertFile adds extra trusted CAs (e.g. a TLS-inspecting proxy's) to the
 // system pool.
@@ -728,6 +756,9 @@ func newTransport(proxy string, insecure bool, caCertFile string) (*http.Transpo
 	}
 
 	transport := http.DefaultTransport.(*http.Transport).Clone()
+	// Go's default transport has no limit on how long a server may take to start responding,
+	// so a server that accepts the connection and then stalls would hang the run forever.
+	transport.ResponseHeaderTimeout = responseHeaderTimeout
 
 	if proxy != "" {
 		proxyURL, err := url.Parse(proxy)
