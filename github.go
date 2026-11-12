@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/http"
 	"context"
 	"encoding/base64"
 	"fmt"
@@ -24,8 +25,11 @@ type prPublishOptions struct {
 // newGithubClient builds a go-github client authenticated with token. host is the
 // repo's hostname ("github.com" or a GitHub Enterprise hostname); anything other than
 // "github.com" is routed through the Enterprise API/upload base URLs.
-func newGithubClient(token, host string) (*github.Client, error) {
+func newGithubClient(token, host string, transport http.RoundTripper) (*github.Client, error) {
 	opts := []github.ClientOptionsFunc{github.WithAuthToken(token)}
+	if transport != nil {
+		opts = append(opts, github.WithTransport(transport))
+	}
 
 	if host != "" && !strings.EqualFold(host, "github.com") {
 		baseURL := fmt.Sprintf("https://%s/api/v3/", host)
