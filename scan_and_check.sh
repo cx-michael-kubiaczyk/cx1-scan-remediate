@@ -70,6 +70,7 @@ if [ -n "$CX1SR_LOGLEVEL" ]; then set -- "$@" -log "$CX1SR_LOGLEVEL"; fi
 if [ -n "$CX1SR_TIMEOUT" ]; then set -- "$@" -timeout "$CX1SR_TIMEOUT"; fi
 if [ -n "$insecure" ]; then set -- "$@" -insecure; fi
 if [ -n "$CX1SR_CACERT" ]; then set -- "$@" -caCert "$CX1SR_CACERT"; fi
+case "$CX1SR_NO_KEEPALIVE" in true|TRUE|True|1) set -- "$@" -noKeepAlive ;; esac
 
 /tmp/cx1scanremediate -cx1 "$CX1_URL" -iam "$IAM_URL" -tenant "$CX1_TENANT" -client "$CX1_CLIENT" -secret "$CX1_SECRET" -triage 5 -remediate 1 -baseBranch "$BRANCH" -githubToken "$GH_PR_PAT" -repo "$GH_REPO_URL" -engine "sast,sca" "$@" -severity "CRITICAL,HIGH"
 tool_rc=$?

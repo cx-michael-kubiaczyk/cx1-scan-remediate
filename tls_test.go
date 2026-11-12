@@ -1,36 +1,17 @@
 package main
 
 import (
+	"context"
 	"encoding/pem"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
-
-func TestArgValue(t *testing.T) {
-	cases := []struct {
-		args []string
-		name string
-		want string
-		ok   bool
-	}{
-		{[]string{"-caCert", "a.pem"}, "caCert", "a.pem", true},
-		{[]string{"--caCert=a.pem"}, "caCert", "a.pem", true},
-		{[]string{"-cx1", "x", "-caCert=b.pem"}, "caCert", "b.pem", true},
-		{[]string{"-cx1", "-caCert"}, "caCert", "", true},
-		{[]string{"-cx1", "caCert"}, "caCert", "", false},
-		{[]string{"-proxy"}, "caCert", "", false},
-	}
-	for _, c := range cases {
-		got, ok := argValue(c.args, c.name)
-		if got != c.want || ok != c.ok {
-			t.Errorf("argValue(%v, %q) = %q,%v want %q,%v", c.args, c.name, got, ok, c.want, c.ok)
-		}
-	}
-}
 
 func TestNewTransportTLS(t *testing.T) {
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
@@ -120,5 +101,42 @@ func TestNewTransportResponseHeaderTimeout(t *testing.T) {
 	}
 	if time.Since(start) > 5*time.Second {
 		t.Errorf("timeout took %v", time.Since(start))
+	}
+}
+
+func TestValueOrEnv(t *testing.T) {
+	t.Setenv("CX1SR_TEST_A", " from-env ")
+	t.Setenv("CX1SR_TEST_B", "second")
+	if got := valueOrEnv("flag", "CX1SR_TEST_A"); got != "flag" {
+		t.Errorf("flag must win, got %q", got)
+	}
+	if got := valueOrEnv("  ", "CX1SR_TEST_A"); got != "from-env" {
+		t.Errorf("got %q", got)
+	}
+	if got := valueOrEnv("", "CX1SR_TEST_MISSING", "CX1SR_TEST_B"); got != "second" {
+		t.Errorf("got %q", got)
+	}
+	if got := valueOrEnv("", "CX1SR_TEST_MISSING"); got != "" {
+		t.Errorf("got %q", got)
+	}
+}
+
+type stubTransport struct{ calls int }
+
+func (s *stubTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	s.calls++
+	return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{}`)), Header: http.Header{}, Request: r}, nil
+}
+
+// the GitHub client must use the shared transport, so -proxy / -insecure / -caCert apply to it too
+func TestNewGithubClientUsesTransport(t *testing.T) {
+	stub := &stubTransport{}
+	client, err := newGithubClient("token", "", stub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, _ = client.Repositories.Get(context.Background(), "o", "r")
+	if stub.calls == 0 {
+		t.Error("GitHub request did not go through the supplied transport")
 	}
 }

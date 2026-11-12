@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"os"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -107,35 +106,64 @@ func main() {
 	baseBranchFlag := flag.String("baseBranch", "", "Branch to open the pull request against; defaults to the repository's default branch")
 	prBranchFlag := flag.String("prBranch", "", "Name of the new branch to create for the pull request; auto-generated if omitted. When remediating more than one result, each pull request's branch is this name plus a result-specific suffix")
 
-	_ = flag.String("proxy", "", "Optional: Proxy server to connect to for outbound calls to Cx1")
-	_ = flag.Bool("insecure", false, "Optional: DISABLE TLS certificate verification for calls to Cx1 (insecure; prefer -caCert)")
-	_ = flag.String("caCert", "", "Optional: Path to a PEM file with extra CA certificate(s) to trust for calls to Cx1, e.g. the CA of a TLS-inspecting proxy; added to the system trust store")
+	proxy := flag.String("proxy", "", "Optional: Proxy server (http, https or socks5 URL) for outbound calls to Cx1 and GitHub; defaults to the HTTPS_PROXY environment variable")
+	insecure := flag.Bool("insecure", false, "Optional: DISABLE TLS certificate verification for calls to Cx1 and GitHub (insecure; prefer -caCert)")
+	caCert := flag.String("caCert", "", "Optional: Path to a PEM file with extra CA certificate(s) to trust for calls to Cx1 and GitHub, e.g. the CA of a TLS-inspecting proxy; added to the system trust store")
 
-	proxy := getProxy()
-	insecure := getBoolFlag("insecure")
-	caCert := getFlagValue("caCert")
-	transport, err := newTransport(proxy, insecure, caCert)
+	noKeepAlive := flag.Bool("noKeepAlive", false, "Optional: Disable HTTP connection reuse (a new connection per request); use if a proxy drops pooled connections and calls fail with random EOF errors")
+
+	// Cx1 authentication flags. These mirror Cx1ClientGo.NewClient, which can't be used here
+	// because it parses the flags itself before the HTTP transport (which depends on -proxy,
+	// -insecure and -caCert) can be built.
+	apiKey := flag.String("apikey", "", "CheckmarxOne API Key (if not using client id/secret; falls back to CX_APIKEY)")
+	clientID := flag.String("client", "", "CheckmarxOne Client ID (if not using API Key; falls back to CX_CLIENT_ID)")
+	clientSecret := flag.String("secret", "", "CheckmarxOne Client Secret (if not using API Key; falls back to CX_CLIENT_SECRET)")
+	cx1URL := flag.String("cx1", "", "CheckmarxOne platform URL (falls back to CX_BASE_URI)")
+	iamURL := flag.String("iam", "", "CheckmarxOne IAM URL (falls back to CX_BASE_AUTH_URI)")
+	tenant := flag.String("tenant", "", "CheckmarxOne tenant (falls back to CX_TENANT)")
+	token := flag.String("token", "", "Optional: A valid access_token. If this value is provided, others will be ignored - the client will lose access when the token expires")
+	userAgent := flag.String("useragent", "Cx1ClientGo", "Optional: A custom user-agent string for all requests to Cx1")
+
+	flag.Parse()
+
+	transport, err := newTransport(*proxy, *insecure, *caCert)
 	if err != nil {
 		logger.Fatalf("Invalid proxy/TLS configuration: %s", err)
 	}
-	httpClient := &http.Client{Transport: transport}
-	if proxy != "" {
+	transport.DisableKeepAlives = *noKeepAlive
+	if *noKeepAlive {
+		logger.Info("HTTP keep-alives disabled (-noKeepAlive)")
+	}
+	if *proxy != "" {
 		logger.Infof("Using proxy")
 	}
-	if insecure {
+	if *insecure {
 		logger.Warn("TLS certificate verification is DISABLED (-insecure); credentials and results can be intercepted. Prefer -caCert")
 	}
-	if caCert != "" {
-		logger.Infof("Trusting additional CA certificate(s) from %s", caCert)
+	if *caCert != "" {
+		logger.Infof("Trusting additional CA certificate(s) from %s", *caCert)
 	}
-	cx1client, err := Cx1ClientGo.NewClient(httpClient, logger)
 
+	cx1client, err := Cx1ClientGo.NewClientWithOptions(Cx1ClientGo.Cx1ClientConfiguration{
+		HttpClient:  &http.Client{Transport: transport},
+		Logger:      logger,
+		HTTPHeaders: http.Header{"User-Agent": []string{*userAgent}},
+		Auth: Cx1ClientGo.Cx1ClientAuth{
+			APIKey:       valueOrEnv(*apiKey, "CX_APIKEY"),
+			ClientID:     valueOrEnv(*clientID, "CX_CLIENT_ID"),
+			ClientSecret: valueOrEnv(*clientSecret, "CX_CLIENT_SECRET"),
+			AccessToken:  *token,
+		},
+		Cx1Url: valueOrEnv(*cx1URL, "CX_BASE_URI"),
+		IAMUrl: valueOrEnv(*iamURL, "CX_BASE_AUTH_URI"),
+		Tenant: valueOrEnv(*tenant, "CX_TENANT"),
+	})
 	if err != nil {
 		logger.Fatalf("Error creating client: %s", err)
 	}
 	logger.Infof("Connected with %v", cx1client.String())
 
-	// NewClient has parsed the flags by this point. Remediations are only ever delivered as
+	// Remediations are only ever delivered as
 	// pull requests, so fail now rather than after spending AI credits (e.g. on triage).
 	if *numRemediate > 0 && *githubToken == "" {
 		logger.Fatal("-remediate requires a GitHub token (-githubToken) to publish pull requests")
@@ -340,6 +368,7 @@ func main() {
 
 		pr := prOptions{
 			Token:           *githubToken,
+			Transport:       transport,
 			Repo:            *repoFlag,
 			BaseBranch:      *baseBranchFlag,
 			Branch:          *prBranchFlag,
@@ -468,6 +497,7 @@ func triageBatchOf(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger, scan
 // prOptions configures how a pull request is published for each remediation.
 type prOptions struct {
 	Token      string
+	Transport  http.RoundTripper // shared with the Cx1 client, so GitHub calls honor -proxy, -insecure and -caCert
 	Repo       string
 	BaseBranch string
 	Branch     string
@@ -558,7 +588,7 @@ func publishRemediationPR(logger *logrus.Logger, cx1client *Cx1ClientGo.Cx1Clien
 		return
 	}
 
-	client, err := newGithubClient(pr.Token, host)
+	client, err := newGithubClient(pr.Token, host, pr.Transport)
 	if err != nil {
 		recordError(logger, "Failed to create GitHub client: %s", err)
 		return
@@ -692,56 +722,6 @@ func sevcmp(sev1, sev2 string) int {
 	return 1
 }
 
-func getProxy() string {
-	return getFlagValue("proxy")
-}
-
-// getFlagValue reads a string flag straight from os.Args. It is needed because the HTTP
-// transport must be built before Cx1ClientGo.NewClient runs flag.Parse.
-func getFlagValue(name string) string {
-	v, _ := argValue(os.Args[1:], name)
-	return v
-}
-
-// getBoolFlag reads a boolean flag (-name, --name, -name=true) straight from os.Args. Unlike
-// value flags, a bool flag never consumes the following argument.
-func getBoolFlag(name string) bool {
-	for _, a := range os.Args[1:] {
-		trimmed := strings.TrimPrefix(strings.TrimPrefix(a, "-"), "-")
-		if trimmed == a {
-			continue
-		}
-		if trimmed == name {
-			return true
-		}
-		if v, ok := strings.CutPrefix(trimmed, name+"="); ok {
-			b, err := strconv.ParseBool(v)
-			return err == nil && b
-		}
-	}
-	return false
-}
-
-// argValue finds -name value, --name value, -name=value or --name=value in args.
-func argValue(args []string, name string) (string, bool) {
-	for i, a := range args {
-		a = strings.TrimPrefix(strings.TrimPrefix(a, "-"), "-")
-		if a == args[i] {
-			continue // not a flag
-		}
-		if a == name {
-			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
-				return args[i+1], true
-			}
-			return "", true
-		}
-		if v, ok := strings.CutPrefix(a, name+"="); ok {
-			return v, true
-		}
-	}
-	return "", false
-}
-
 // responseHeaderTimeout bounds the wait for a server's response headers after the request has
 // been sent. It does not limit reading the body, so long-lived event streams are unaffected once
 // they have started.
@@ -766,7 +746,6 @@ func newTransport(proxy string, insecure bool, caCertFile string) (*http.Transpo
 			return nil, fmt.Errorf("invalid -proxy %q: expected a URL such as http://host:port", proxy)
 		}
 		transport.Proxy = http.ProxyURL(proxyURL)
-		transport.DisableKeepAlives = true
 	}
 
 	switch {
@@ -788,4 +767,18 @@ func newTransport(proxy string, insecure bool, caCertFile string) (*http.Transpo
 	}
 
 	return transport, nil
+}
+
+// valueOrEnv returns the flag value, or the first non-empty of the environment variables when
+// the flag is empty. Values are whitespace-trimmed.
+func valueOrEnv(flagValue string, envNames ...string) string {
+	if v := strings.TrimSpace(flagValue); v != "" {
+		return v
+	}
+	for _, name := range envNames {
+		if v := strings.TrimSpace(os.Getenv(name)); v != "" {
+			return v
+		}
+	}
+	return ""
 }
