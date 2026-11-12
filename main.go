@@ -103,7 +103,7 @@ func main() {
 
 	// repo-scope (classic PAT) or Contents+Pull-requests write (fine-grained) permissions
 	githubToken := flag.String("githubToken", "", "GitHub token used to publish a pull request with the remediation changes (falls back to the GITHUB_TOKEN env var); required when using -remediate")
-	repoFlag := flag.String("repo", "", "Target GitHub repository (owner/repo, https URL, or SSH URL) for the pull request; derived from the Checkmarx One project's repoUrl if omitted")
+	repoFlag := flag.String("repo", "", "Target GitHub repository (owner/repo, HTTP(S) URL, or SSH URL; GitHub.com, GitHub Enterprise Server or a *.ghe.com host) for the pull request; derived from the Checkmarx One project's repoUrl if omitted")
 	baseBranchFlag := flag.String("baseBranch", "", "Branch to open the pull request against; defaults to the repository's default branch")
 	prBranchFlag := flag.String("prBranch", "", "Prefix for the names of the branches created for pull requests; each branch is this prefix plus the engine and result ID (default \"cx1-remediate/\"). A finding whose branch already exists is skipped")
 

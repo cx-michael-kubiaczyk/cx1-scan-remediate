@@ -25,57 +25,96 @@ type prPublishOptions struct {
 	Files         []patchedFile
 }
 
-// newGithubClient builds a go-github client authenticated with token. host is the
-// repo's hostname ("github.com" or a GitHub Enterprise hostname); anything other than
-// "github.com" is routed through the Enterprise API/upload base URLs.
+// newGithubClient builds a go-github client authenticated with token. host is the repo's
+// hostname as returned by parseOwnerRepo: "github.com", a GitHub Enterprise Server hostname
+// (API at https://<host>/api/v3/), or a GitHub Enterprise Cloud hostname with data residency
+// (<name>.ghe.com, API at https://api.<host>/).
 func newGithubClient(token, host string, transport http.RoundTripper) (*github.Client, error) {
 	opts := []github.ClientOptionsFunc{github.WithAuthToken(token)}
 	if transport != nil {
 		opts = append(opts, github.WithTransport(transport))
 	}
 
-	if host != "" && !strings.EqualFold(host, "github.com") {
-		baseURL := fmt.Sprintf("https://%s/api/v3/", host)
-		uploadURL := fmt.Sprintf("https://%s/api/uploads/", host)
-		opts = append(opts, github.WithEnterpriseURLs(baseURL, uploadURL))
+	switch {
+	case host == "" || strings.EqualFold(host, "github.com"):
+	case isGHECloudHost(host):
+		opts = append(opts, github.WithEnterpriseURLs(
+			fmt.Sprintf("https://api.%s/", host),
+			fmt.Sprintf("https://uploads.%s/", host)))
+	default:
+		opts = append(opts, github.WithEnterpriseURLs(
+			fmt.Sprintf("https://%s/api/v3/", host),
+			fmt.Sprintf("https://%s/api/uploads/", host)))
 	}
 
 	return github.NewClient(opts...)
 }
 
-// parseOwnerRepo extracts the SCM host, owner and repo name from a repo reference,
-// accepting "owner/repo", an HTTPS URL, or an SSH URL (git@host:owner/repo.git).
+// isGHECloudHost reports whether host is a GitHub Enterprise Cloud with data residency host.
+func isGHECloudHost(host string) bool {
+	return strings.HasSuffix(strings.ToLower(host), ".ghe.com")
+}
+
+// unsupportedHost reports whether host belongs to another source-control service (GitLab,
+// Bitbucket, Azure DevOps). Such hosts would otherwise be mistaken for GitHub Enterprise Server
+// and fail with a confusing 404.
+func unsupportedHost(host string) bool {
+	h := strings.ToLower(host)
+	for _, known := range []string{"gitlab.com", "bitbucket.org", "dev.azure.com", "ssh.dev.azure.com", "visualstudio.com"} {
+		if h == known || strings.HasSuffix(h, "."+known) {
+			return true
+		}
+	}
+	// self-hosted installations of the same products
+	return strings.HasPrefix(h, "gitlab.") || strings.HasPrefix(h, "bitbucket.")
+}
+
+// parseOwnerRepo extracts the SCM host, owner and repo name from a repo reference: "owner/repo",
+// an HTTP(S) URL, an SSH URL (git@host:owner/repo.git or ssh://git@host[:port]/owner/repo.git).
+// Anything after the first two path segments (such as /tree/main) is ignored. The host is
+// lower-case, without a leading "www." and, for SSH URLs, without the SSH port (an HTTP(S)
+// port is kept, as it is part of the web address). A plain http:// URL is used as https://.
+// Hosts of other services (GitLab, Bitbucket, Azure DevOps) are rejected.
 func parseOwnerRepo(repoURLOrSlug string) (host, owner, repo string, err error) {
 	s := strings.TrimSpace(repoURLOrSlug)
-	s = strings.TrimSuffix(s, ".git")
 
 	switch {
-	case strings.HasPrefix(s, "git@"):
-		rest := strings.TrimPrefix(s, "git@")
-		parts := strings.SplitN(rest, ":", 2)
-		if len(parts) != 2 {
-			return "", "", "", fmt.Errorf("could not parse SSH repo URL %q", repoURLOrSlug)
-		}
-		host = parts[0]
-		s = parts[1]
 	case strings.Contains(s, "://"):
 		u, perr := url.Parse(s)
 		if perr != nil {
 			return "", "", "", fmt.Errorf("could not parse repo URL %q: %w", repoURLOrSlug, perr)
 		}
-		host = u.Host
-		s = strings.TrimPrefix(u.Path, "/")
+		host = u.Hostname()
+		if u.Scheme == "http" || u.Scheme == "https" {
+			host = u.Host // keeps a port; the user info is not part of it
+		}
+		s = u.Path
+	case strings.Contains(s, "@") && strings.Contains(s, ":"):
+		// scp-like SSH syntax: git@host:owner/repo.git
+		rest := s[strings.Index(s, "@")+1:]
+		host, s, _ = strings.Cut(rest, ":")
 	default:
 		host = "github.com"
 	}
 
-	s = strings.Trim(s, "/")
-	parts := strings.SplitN(s, "/", 2)
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+	host = strings.TrimPrefix(strings.ToLower(host), "www.")
+	if host == "" {
+		return "", "", "", fmt.Errorf("could not determine the host from %q", repoURLOrSlug)
+	}
+	if unsupportedHost(host) {
+		return "", "", "", fmt.Errorf("%q is not a GitHub host; only GitHub pull requests are supported", host)
+	}
+
+	parts := strings.Split(strings.Trim(s, "/"), "/")
+	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", "", fmt.Errorf("could not determine owner/repo from %q", repoURLOrSlug)
+	}
+	repo = strings.TrimSuffix(parts[1], ".git")
+	if repo == "" {
 		return "", "", "", fmt.Errorf("could not determine owner/repo from %q", repoURLOrSlug)
 	}
 
-	return host, parts[0], parts[1], nil
+	return host, parts[0], repo, nil
 }
 
 // publishPR builds a single commit containing just opts.Files (taken from memory, so the
@@ -122,9 +161,13 @@ func publishPR(ctx context.Context, client *github.Client, owner, repo string, o
 			return "", fmt.Errorf("failed to upload blob for %s: %w", f.Path, err)
 		}
 
+		mode := "100644"
+		if f.Executable {
+			mode = "100755" // keep the executable bit of e.g. gradlew or a shell script
+		}
 		entries = append(entries, &github.TreeEntry{
 			Path: new(f.Path),
-			Mode: new("100644"),
+			Mode: new(mode),
 			Type: new("blob"),
 			SHA:  blob.SHA,
 		})

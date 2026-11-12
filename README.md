@@ -31,6 +31,14 @@ A remediation is all-or-nothing: if any of its changes cannot be applied, no PR 
 
 A GitHub token is required when using -remediate; the tool exits before submitting anything to CheckmarxOne if none is available.
 
+## Repository URLs
+The repository comes from `-repo`, or from the `repoUrl` of the Checkmarx One project. It can be written as `owner/repo`, an HTTP(S) URL, or an SSH URL (`git@host:owner/repo.git` or `ssh://git@host[:port]/owner/repo.git`); anything after the owner and repository (such as `/tree/main`) is ignored, and an SSH port is not used for the API. Supported hosts:
+- github.com
+- GitHub Enterprise Server (`https://<host>/api/v3/`)
+- GitHub Enterprise Cloud with data residency (`<name>.ghe.com`, using `https://api.<host>/`)
+
+A plain `http://` URL is used as `https://`. GitLab, Bitbucket and Azure DevOps are not supported and are rejected before anything is sent to Checkmarx One.
+
 # Pipeline Script
 For easy testing, the scan_and_check.sh script is available on this repo and could be triggered directly from a pipeline, for example:
 ```
@@ -114,7 +122,7 @@ This tool is a Proof-of-Concept and has a number of limitations outlined below.
   -remediationBatch int
         Number of results submitted to AI Remediation together in one request (1-5) (default 5)
   -repo string
-        Target GitHub repository (owner/repo, https URL, or SSH URL) for the pull request; derived from the Checkmarx One project's repoUrl if omitted
+        Target GitHub repository (owner/repo, HTTP(S) URL, or SSH URL; GitHub.com, GitHub Enterprise Server or a *.ghe.com host) for the pull request; derived from the Checkmarx One project's repoUrl if omitted
 ```
 
 ## Misc  
