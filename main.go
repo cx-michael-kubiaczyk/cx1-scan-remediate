@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"cmp"
 	"context"
 	"crypto/tls"
@@ -209,6 +210,27 @@ func main() {
 	}
 	logger.Infof("Target scan is %s", scan.String())
 
+	// Pull requests are the only way remediations are delivered, so make sure they can be
+	// created before any AI Triage or Remediation credits are spent.
+	pr := prOptions{
+		Token:      *githubToken,
+		Transport:  transport,
+		Repo:       *repoFlag,
+		BaseBranch: *baseBranchFlag,
+		Branch:     *prBranchFlag,
+	}
+	if *numRemediate > 0 {
+		pr, err = preflightPR(context.Background(), logger, cx1client, &scan, pr, *sourceDir)
+		if err != nil {
+			code := exitError
+			if errors.Is(err, errConfig) {
+				code = exitUsage
+			}
+			logger.Errorf("Pull request preflight check failed: %s", err)
+			os.Exit(code)
+		}
+	}
+
 	inScopeCount := 0
 
 	logger.Infof("Scan has %d SAST and %d SCA", len(results.SAST), len(results.SCA))
@@ -340,14 +362,7 @@ func main() {
 		batchSize := clampBatchSize(logger, "remediationBatch", *remediationBatch)
 		logger.Infof("Will auto-remediate %d results (requested %d, out of %d) in batches of up to %d", len(candidates), *numRemediate, len(index), batchSize)
 
-		pr := prOptions{
-			Token:           *githubToken,
-			Transport:       transport,
-			Repo:            *repoFlag,
-			BaseBranch:      *baseBranchFlag,
-			Branch:          *prBranchFlag,
-			BranchPerResult: len(candidates) > 1,
-		}
+		pr.BranchPerResult = len(candidates) > 1
 
 		for batch := range slices.Chunk(candidates, batchSize) {
 			if aiBudget.expired() {
@@ -556,18 +571,10 @@ func publishRemediationPR(logger *logrus.Logger, cx1client *Cx1ClientGo.Cx1Clien
 		return
 	}
 
-	repoRef := pr.Repo
-	if repoRef == "" {
-		project, err := cx1client.GetProjectByID(scan.ProjectID)
-		if err != nil {
-			recordError(logger, "Failed to look up project %s to determine its repository: %s", scan.ProjectID, err)
-			return
-		}
-		if project.RepoUrl == "" {
-			recordError(logger, "Project has no repoUrl configured in Checkmarx One and -repo was not provided; skipping pull request creation")
-			return
-		}
-		repoRef = project.RepoUrl
+	repoRef, err := resolveRepoRef(cx1client, scan, pr.Repo)
+	if err != nil {
+		recordError(logger, "%s; skipping pull request creation", err)
+		return
 	}
 
 	host, owner, repo, err := parseOwnerRepo(repoRef)
