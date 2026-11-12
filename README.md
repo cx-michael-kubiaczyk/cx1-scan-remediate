@@ -51,12 +51,17 @@ The script takes variables from the pipeline for each step (CheckmarxOne URLs & 
 - GH_REPO_URL: location of the target repository
 - BRANCH: PRs raised by this tool will target this branch + scans in CheckmarxOne will be listed under this branch
 - PROJECT_NAME: scans in CheckmarxOne will be created under this project
-- CX1_URL: URL for the CheckmarxOne instance eg: https://deu.ast.checkmarx.net
-- IAM_URL: Authentication URL for the CheckmarxOne instance eg: https://deu.iam.checkmarx.net
-- CX1_TENANT: Tenant in the CheckmarxOne instance
-- CX1_CLIENT: OIDC Client ID to use for connecting to CheckmarxOne
-- CX1_SECRET: OIDC Client Secret to use for connecting to CheckmarxOne
-- CX1SR_PROXY: Optional HTTP proxy to use by the cx1-scan-remediate tool
+- CX_BASE_URI: URL for the CheckmarxOne instance eg: https://deu.ast.checkmarx.net (older name: CX1_URL)
+- CX_BASE_AUTH_URI: Authentication URL for the CheckmarxOne instance eg: https://deu.iam.checkmarx.net (older name: IAM_URL)
+- CX_TENANT: Tenant in the CheckmarxOne instance (older name: CX1_TENANT)
+- CX_CLIENT_ID: OIDC Client ID to use for connecting to CheckmarxOne (older name: CX1_CLIENT)
+- CX_CLIENT_SECRET: OIDC Client Secret to use for connecting to CheckmarxOne (older name: CX1_SECRET)
+- CX_APIKEY: Optional API key, used instead of the client ID/secret/tenant/IAM URL (older name: CX1_APIKEY)
+- CX1SR_PROXY: Optional proxy URL (e.g. http://proxy.corp:8080) used for the downloads, the AST CLI and the cx1-scan-remediate tool
+
+The `CX_*` variables are the ones the AST CLI reads itself, so the scan never has them on its command line. The cx1-scan-remediate tool is still given the credentials as flags by the script until the pinned version is updated to one that reads the environment.
+
+The script exits non-zero whenever the scan breaks the threshold, whatever the AI steps do: AI Triage only ever proposes a state (a person still has to confirm it) and remediations are only pull requests. If the scan fails without producing a report (bad credentials, network error), the AST CLI's own exit code is returned.
 - CX1SR_CACERT: Optional path to a PEM file with extra CA certificate(s) to trust, e.g. the CA of a TLS-inspecting proxy. Used for the downloads, the AST CLI (via SSL_CERT_FILE, which replaces the CLI's system roots) and the cx1-scan-remediate tool (-caCert, which adds to the system roots)
 - CX1SR_INSECURE: Optional; set to "true" to disable TLS certificate verification (not recommended; mutually exclusive with CX1SR_CACERT)
 - CX1SR_TIMEOUT: Optional overall time limit for AI Triage and AI Remediation as a duration, e.g. 45m (default: 30m; 0 for no limit)

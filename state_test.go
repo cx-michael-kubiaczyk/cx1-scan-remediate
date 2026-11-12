@@ -62,3 +62,25 @@ func TestIsVerifiedOnlyConfirmedOrUrgent(t *testing.T) {
 		}
 	}
 }
+
+func TestCanTriage(t *testing.T) {
+	logger := logrus.New()
+	logger.SetOutput(&bytes.Buffer{})
+
+	cases := []struct {
+		name string
+		f    resultIndex
+		want bool
+	}{
+		{"sast to_verify", resultIndex{Engine: "sast", State: "TO_VERIFY", SimilarityID: "1"}, true},
+		{"sast confirmed", resultIndex{Engine: "sast", State: "CONFIRMED", SimilarityID: "1"}, false},
+		{"sca complete", resultIndex{Engine: "sca", State: "TO_VERIFY", SimilarityID: "1", PackageID: "Npm-x-1.0"}, true},
+		{"sca no package id", resultIndex{Engine: "sca", State: "TO_VERIFY", SimilarityID: "1"}, false},
+		{"sca no similarity id", resultIndex{Engine: "sca", State: "TO_VERIFY", PackageID: "Npm-x-1.0"}, false},
+	}
+	for _, c := range cases {
+		if got := canTriage(logger, &c.f); got != c.want {
+			t.Errorf("%s: canTriage = %v, want %v", c.name, got, c.want)
+		}
+	}
+}

@@ -348,7 +348,7 @@ func main() {
 	}
 
 	if *numTriage > 0 {
-		candidates := pickFindings(index, *numTriage, func(f *resultIndex) bool { return f.State == stateToVerify })
+		candidates := pickFindings(index, *numTriage, func(f *resultIndex) bool { return canTriage(logger, f) })
 		batchSize := clampBatchSize(logger, "triageBatch", *triageBatch)
 		logger.Infof("Will auto-triage %d results (requested %d) in batches of up to %d", len(candidates), *numTriage, batchSize)
 
@@ -416,6 +416,20 @@ func pickFindings(index []resultIndex, limit int, eligible func(*resultIndex) bo
 		}
 	}
 	return picked
+}
+
+// canTriage reports whether a finding should be submitted to AI Triage: it must still be
+// TO_VERIFY, and an SCA finding must carry its package identifier, which is part of the job's
+// key. Without it the platform has no such job, and polling would just wait out the timeout.
+func canTriage(logger *logrus.Logger, f *resultIndex) bool {
+	if f.State != stateToVerify {
+		return false
+	}
+	if f.Engine == "sca" && (f.SimilarityID == "" || f.PackageID == "") {
+		logger.Warnf("Skipping AI Triage for %s: the report entry has no similarity ID or package identifier", f)
+		return false
+	}
+	return true
 }
 
 // isVerified reports whether a finding has been confirmed as a real issue, the only states
