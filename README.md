@@ -75,19 +75,19 @@ This tool is a Proof-of-Concept and has a number of limitations outlined below.
 ## Auth
 ```
   -apikey string
-        CheckmarxOne API Key (if not using client id/secret)
+        CheckmarxOne API Key (if not using client id/secret; falls back to CX_APIKEY)
   -client string
-        CheckmarxOne Client ID (if not using API Key)
+        CheckmarxOne Client ID (if not using API Key; falls back to CX_CLIENT_ID)
   -cx1 string
-        Optional: CheckmarxOne platform URL, if not defined in the test config.yaml
+        CheckmarxOne platform URL (falls back to CX_BASE_URI)
   -githubToken string
         GitHub token used to publish a pull request with the remediation changes (falls back to the GITHUB_TOKEN env var); required when using -remediate
   -iam string
-        Optional: CheckmarxOne IAM URL, if not defined in the test config.yaml
+        CheckmarxOne IAM URL (falls back to CX_BASE_AUTH_URI)
   -secret string
-        CheckmarxOne Client Secret (if not using API Key)
+        CheckmarxOne Client Secret (if not using API Key; falls back to CX_CLIENT_SECRET)
   -tenant string
-        Optional: CheckmarxOne tenant, if not defined in the test config.yaml
+        CheckmarxOne tenant (falls back to CX_TENANT)
   -token string
         Optional: A valid access_token. If this value is provided, others will be ignored - the client will lose access when the token expires
 ```
@@ -104,19 +104,17 @@ This tool is a Proof-of-Concept and has a number of limitations outlined below.
   -severity string
         Focus only on results of these severities - comma separated list from: CRITICAL,HIGH,MEDIUM,LOW,INFO (default "CRITICAL,HIGH")
   -triage int
-        Number of results to triage, sorted by highest-priority and resultId (default 0)
+        Number of results to triage, sorted by highest-priority and resultId; at most 25 per run (default 0)
   -triageBatch int
         Number of results submitted to AI Triage together in one request (1-5) (default 5)
   -prBranch string
         Name of the new branch to create for the pull request; auto-generated if omitted. When remediating more than one result, each pull request's branch is this name plus a result-specific suffix
   -remediate int
-        Number of results to remediate, sorted by highest-priority and resultId (default 1)
+        Number of results to remediate, sorted by highest-priority and resultId; at most 25 per run (default 1)
   -remediationBatch int
         Number of results submitted to AI Remediation together in one request (1-5) (default 5)
   -repo string
         Target GitHub repository (owner/repo, https URL, or SSH URL) for the pull request; derived from the Checkmarx One project's repoUrl if omitted
-  -scanId string
-        Scan ID for the processed scan report
 ```
 
 ## Misc  
@@ -130,12 +128,19 @@ This tool is a Proof-of-Concept and has a number of limitations outlined below.
   -proxy string
         Optional: Proxy server (http, https or socks5 URL) for outbound calls to Cx1 and GitHub; defaults to the HTTPS_PROXY environment variable
   -log string
-        Log level: TRACE, DEBUG, INFO, WARNING, ERROR, FATAL (default "INFO")
+        Log level: TRACE, DEBUG, INFO, WARNING, ERROR, FATAL; any other value is rejected (default "INFO")
   -timeout duration
         Overall time limit for waiting on AI Triage and AI Remediation, e.g. 30m; 0 for no limit (default 30m0s). Work that completes in time is still published as pull requests; unfinished work is abandoned and the run exits non-zero
   -useragent string
         Optional: A custom user-agent string for all requests to Cx1 (default "Cx1ClientGo")
 ```
+
+## Exit codes
+| Code | Meaning |
+| --- | --- |
+| 1 | The run completed and findings above the threshold remain. This is the normal result: AI Triage only proposes a state and remediation only opens a pull request, so the pipeline must still fail. |
+| 2 | Invalid command line (unknown engine or log level, negative count, `-remediate` without a GitHub token, ...). Checked before anything is sent to Checkmarx One. |
+| 3 | An operational error: an API, patch, pull request or timeout failure, or a fatal error. |
 
 # Limitations
 This tool has various limitations as it is intended for a Proof-of-Concept demonstration.
