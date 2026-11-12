@@ -91,7 +91,7 @@ fi
 
 # --- Triage and remediate --------------------------------------------------
 echo "Threshold exceeded"
-if ! download -fsSL https://github.com/cx-michael-kubiaczyk/cx1-scan-remediate/releases/download/v0.0.8/cx1scanremediate -o "$WORKDIR/cx1scanremediate"; then
+if ! download -fsSL https://github.com/cx-michael-kubiaczyk/cx1-scan-remediate/releases/download/v0.0.9/cx1scanremediate -o "$WORKDIR/cx1scanremediate"; then
     echo "Could not download cx1scanremediate; the threshold failure stands" >&2
     exit "$scan_rc"
 fi
