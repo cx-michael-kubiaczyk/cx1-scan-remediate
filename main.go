@@ -210,6 +210,8 @@ func main() {
 	}
 	logger.Infof("Target scan is %s", scan.String())
 
+	deepLink := cx1client.GetBaseURL() + "/riskhub/" + scan.ProjectID
+
 	// Pull requests are the only way remediations are delivered, so make sure they can be
 	// created before any AI Triage or Remediation credits are spent.
 	pr := prOptions{
@@ -218,6 +220,7 @@ func main() {
 		Repo:       *repoFlag,
 		BaseBranch: *baseBranchFlag,
 		Branch:     *prBranchFlag,
+		DeepLink:   deepLink,
 	}
 	if *numRemediate > 0 {
 		pr, err = preflightPR(context.Background(), logger, cx1client, &scan, pr, *sourceDir)
@@ -562,14 +565,41 @@ func remediateBatchOf(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger, s
 			continue
 		}
 
+		result, err := selectResult(details, finding.AlternateID)
+		if err != nil {
+			recordError(logger, "Skipping remediation for %s %s finding %s: %s", finding.Severity, finding.Engine, finding, err)
+			continue
+		}
+		// only this finding's result is applied, so the pull request holds exactly its fix
+		details.Results = []Cx1ClientGo.AIRemediationResult{result}
+
 		changes, err := applyRemediationInMemory(logger, details, sourceDir)
 		if err != nil {
 			recordError(logger, "Skipping remediation for %s %s finding %s: %s", finding.Severity, finding.Engine, finding, err)
 			continue
 		}
 
-		publishRemediationPR(logger, details, changes, pr, branchFor(pr, finding))
+		publishRemediationPR(logger, result, finding, changes, pr, branchFor(pr, finding))
 	}
+}
+
+// selectResult picks the remediation result for the finding with this alternate ID from the details
+// the platform returned. The result is matched by its ID; if none matches and there is exactly one
+// result, that one is used. A result that reports an error is not usable.
+func selectResult(details Cx1ClientGo.AIRemediationDetails, alternateID string) (Cx1ClientGo.AIRemediationResult, error) {
+	var result Cx1ClientGo.AIRemediationResult
+	switch i := slices.IndexFunc(details.Results, func(r Cx1ClientGo.AIRemediationResult) bool { return r.ResultID == alternateID }); {
+	case i >= 0:
+		result = details.Results[i]
+	case len(details.Results) == 1:
+		result = details.Results[0]
+	default:
+		return result, fmt.Errorf("none of the %d remediation results returned is for result %s", len(details.Results), alternateID)
+	}
+	if result.Data.Error != nil {
+		return result, fmt.Errorf("remediation %s reported an error: %s", result.RemediationID, *result.Data.Error)
+	}
+	return result, nil
 }
 
 var sevmap = map[string]int{
