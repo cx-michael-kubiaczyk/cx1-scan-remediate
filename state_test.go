@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"strings"
 	"testing"
 
@@ -81,6 +82,25 @@ func TestCanTriage(t *testing.T) {
 	for _, c := range cases {
 		if got := canTriage(logger, &c.f); got != c.want {
 			t.Errorf("%s: canTriage = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestAITriageState(t *testing.T) {
+	logger := logrus.New()
+	logger.SetOutput(io.Discard)
+	cases := []struct{ exploitability, reachability, want string }{
+		{"NOT_EXPLOITABLE", "REACHABLE", "PROPOSED_NOT_EXPLOITABLE"},
+		{"TO_VERIFY", "NOT_REACHABLE", "PROPOSED_NOT_EXPLOITABLE"},
+		{"NOT_EXPLOITABLE", "NOT_REACHABLE", "PROPOSED_NOT_EXPLOITABLE"},
+		{"CONFIRMED", "reachable", "CONFIRMED"},
+		{"URGENT", "", "URGENT"},
+		{"", "", "TO_VERIFY"},
+		{"garbage", "", "TO_VERIFY"},
+	}
+	for _, c := range cases {
+		if got := aiTriageState(logger, "t", c.exploitability, c.reachability, "TO_VERIFY"); got != c.want {
+			t.Errorf("aiTriageState(%q, %q) = %q, want %q", c.exploitability, c.reachability, got, c.want)
 		}
 	}
 }

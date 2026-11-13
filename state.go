@@ -31,6 +31,18 @@ func normalizeState(raw string) string {
 	return strings.NewReplacer(" ", "_", "-", "_").Replace(s)
 }
 
+// aiTriageState turns an AI Triage result into the state this tool records for the finding.
+// AI Triage never sets NOT_EXPLOITABLE: a NOT_EXPLOITABLE exploitability or a NOT_REACHABLE
+// reachability becomes PROPOSED_NOT_EXPLOITABLE, which a person still has to confirm. The
+// platform's own state is not fetched again, as the two APIs are not always in sync.
+func aiTriageState(logger *logrus.Logger, source, exploitability, reachability, fallback string) string {
+	s := resolveState(logger, source, exploitability, fallback)
+	if s == stateNotExploitable || s == stateProposedNotExploitable || strings.EqualFold(strings.TrimSpace(reachability), "NOT_REACHABLE") {
+		return stateProposedNotExploitable
+	}
+	return s
+}
+
 // resolveState normalizes a state reported by the platform. If it is empty or not one of the
 // known states it logs a warning and returns fallback, so an unexpected value can never
 // silently change how a finding is treated (only CONFIRMED and URGENT are ever remediated).
