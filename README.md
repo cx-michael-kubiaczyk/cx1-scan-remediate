@@ -48,9 +48,17 @@ curl -L https://raw.githubusercontent.com/cx-michael-kubiaczyk/cx1-scan-remediat
   /tmp/scan_and_check.sh
 ```
 
-This script will do the following:
-1. Download & unpack the CheckmarxOne ast-cli (https://github.com/Checkmarx/ast-cli/releases/latest/download/ast-cli_linux_x64.tar.gz)
-2. Run a scan with all engines against the pipeline's source code using CheckmarxOne, failing if there is any Critical or High result (thresholds are set per engine)
+On a Windows agent (x64) use `scan_and_check.ps1` from this repo or the release instead. It performs the same steps with the same environment variables, runs on Windows PowerShell 5.1 or PowerShell 7, and needs `curl.exe` (included with Windows 10 1803+ and Windows Server 2019+). It downloads `ast-cli_<version>_windows_x64.zip` and `cx1scanremediate_windows_amd64.exe`, verifies their checksums and uses the same exit codes. For example:
+```
+curl.exe -L https://raw.githubusercontent.com/cx-michael-kubiaczyk/cx1-scan-remediate/refs/heads/main/scan_and_check.ps1 -o scan_and_check.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scan_and_check.ps1
+```
+Windows on arm64 is not supported.
+
+The scripts do the following:
+0. Detect the platform (Linux x86_64 or arm64; anything else stops with exit code 2)
+1. Download the latest CheckmarxOne ast-cli (https://github.com/Checkmarx/ast-cli/releases), verify its SHA-256 against the checksums file published with that release (the script stops with exit code 3 on a mismatch), and unpack it
+2. Run a scan with all engines against the pipeline's source code using CheckmarxOne, failing if there is any Critical or High result (thresholds are set per engine). The JSON report is written to the script's temporary work directory (`--output-path`), not the scanned source directory, so a stale report in a cached workspace can never be picked up, and the tool is given it with `-input`
 3. If the scan fails, it will download the cx1scanremediate binary from this repository's releases
 4. Run the cx1scanremediate tool to trigger CheckmarxOne AI-Triage on up to 5 Critical/High SAST and SCA findings in the To_Verify state, then AI-Remediation on the most-severe Confirmed or Urgent finding (if any)
 5. Once a code-remediation is available, apply the code fix and raise a pull request against the original repository
@@ -66,6 +74,8 @@ The script takes variables from the pipeline for each step (CheckmarxOne URLs & 
 - CX_CLIENT_ID: OIDC Client ID to use for connecting to CheckmarxOne (older name: CX1_CLIENT)
 - CX_CLIENT_SECRET: OIDC Client Secret to use for connecting to CheckmarxOne (older name: CX1_SECRET)
 - CX_APIKEY: Optional API key, used instead of the client ID/secret/tenant/IAM URL (older name: CX1_APIKEY)
+- CX_CLI_VERSION: Optional AST CLI release tag to use instead of the latest, e.g. 2.3.71
+- CX1SR_VERSION: Optional cx1-scan-remediate release tag to download, e.g. v0.0.11 (default: the latest release, as GitHub reports it - make sure each new release is marked "latest"); its SHA-256 is verified against the release's checksums.txt
 - CX1SR_PROXY: Optional proxy URL (e.g. http://proxy.corp:8080) used for the downloads, the AST CLI and the cx1-scan-remediate tool
 
 The `CX_*` variables are the ones the AST CLI reads itself, so the scan never has them on its command line. The cx1-scan-remediate tool is still given the credentials as flags by the script until the pinned version is updated to one that reads the environment.
@@ -150,6 +160,12 @@ This tool is a Proof-of-Concept and has a number of limitations outlined below.
 | 1 | The run completed and findings above the threshold remain. This is the normal result: AI Triage only proposes a state and remediation only opens a pull request, so the pipeline must still fail. |
 | 2 | Invalid command line (unknown engine or log level, negative count, `-remediate` without a GitHub token, ...). Checked before anything is sent to Checkmarx One. |
 | 3 | An operational error: an API, patch, pull request or timeout failure, or a fatal error. |
+
+Before exiting (with any of the codes above once the report has been read), the tool logs a summary of the results in the scan report that still count against the threshold, per engine, for example:
+
+`Results from the scan report still counting against the threshold (...): SAST 3, SCA 12, Secret Detection 1 (not handled by this tool)`
+
+The summary counts results in the report whose severity is in `-severity` and whose state is not `NOT_EXPLOITABLE` (`PROPOSED_NOT_EXPLOITABLE` still counts, as a person has to confirm it). Engines this tool cannot triage or remediate, and result types the Cx1ClientGo library does not know ("Unknown"), are marked "not handled by this tool", so a threshold break caused only by, say, IaC or Secret Detection findings is easy to recognise. It approximates the AST CLI's threshold from the state recorded in the report: it does not change when this run triages findings or opens pull requests, and it only matches the pipeline's gate when `-severity` matches the threshold (the script uses Critical and High).
 
 # Limitations
 This tool has various limitations as it is intended for a Proof-of-Concept demonstration.

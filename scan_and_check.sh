@@ -56,6 +56,38 @@ download() {
     curl "$@"
 }
 
+# Prints the tag of the latest release of GitHub repository $1 (owner/name), taken from the
+# redirect that github.com/<repo>/releases/latest answers with.
+latest_tag() {
+    url=$(download -fsSIL -o /dev/null -w '%{url_effective}' "https://github.com/$1/releases/latest") || url=""
+    case "$url" in
+        */releases/tag/*) echo "${url##*/}" ;;
+        *) echo "Could not determine the latest release of $1" >&2; return 1 ;;
+    esac
+}
+
+# Checks that file $1 has the SHA-256 listed for asset name $3 in the checksums file $2
+# (lines of "<sha256>  <name>", as published with each release). Exits 3 on any mismatch.
+verify_checksum() {
+    expected=$(tr -d '\r' < "$2" | awk -v n="$3" '$2 == n { print $1; exit }')
+    if [ -z "$expected" ]; then
+        echo "No checksum listed for $3; refusing to run it" >&2
+        exit 3
+    fi
+    if command -v sha256sum >/dev/null 2>&1; then
+        actual=$(sha256sum "$1" | awk '{ print $1 }')
+    elif command -v shasum >/dev/null 2>&1; then
+        actual=$(shasum -a 256 "$1" | awk '{ print $1 }')
+    else
+        echo "Neither sha256sum nor shasum is available to verify $3" >&2
+        exit 3
+    fi
+    if [ "$actual" != "$expected" ]; then
+        echo "Checksum mismatch for $3 (expected $expected, got $actual); refusing to run it" >&2
+        exit 3
+    fi
+}
+
 # The AST CLI has --proxy and --insecure but no CA option; as a Go program it reads
 # SSL_CERT_FILE (which replaces its system roots).
 run_cx() {
@@ -68,33 +100,65 @@ run_cx() {
     fi
 }
 
+# --- Platform --------------------------------------------------------------
+# Pick the AST CLI and tool assets for this machine, and fail early on anything else.
+case "$(uname -s)/$(uname -m)" in
+    Linux/x86_64|Linux/amd64) cli_platform=linux_x64;   tool_platform=linux_amd64 ;;
+    Linux/aarch64|Linux/arm64) cli_platform=linux_arm64; tool_platform=linux_arm64 ;;
+    *)
+        echo "Unsupported platform $(uname -s)/$(uname -m): this script supports Linux on x86_64 and arm64 only" >&2
+        exit 2
+        ;;
+esac
+
 # --- Scan ------------------------------------------------------------------
-download -fsSL https://github.com/Checkmarx/ast-cli/releases/latest/download/ast-cli_linux_x64.tar.gz -o "$WORKDIR/ast-cli_linux_x64.tar.gz"
-tar -xzf "$WORKDIR/ast-cli_linux_x64.tar.gz" -C "$WORKDIR"
+# Resolve the latest AST CLI release once and fetch both the archive and its checksums from
+# that exact tag, so they cannot come from two different releases. CX_CLI_VERSION pins one.
+CX_CLI_VERSION="${CX_CLI_VERSION:-}"
+if [ -z "$CX_CLI_VERSION" ]; then
+    CX_CLI_VERSION=$(latest_tag Checkmarx/ast-cli) || exit 3
+fi
+cli_archive="ast-cli_${CX_CLI_VERSION}_${cli_platform}.tar.gz"
+cli_base="https://github.com/Checkmarx/ast-cli/releases/download/${CX_CLI_VERSION}"
+download -fsSL "$cli_base/$cli_archive" -o "$WORKDIR/$cli_archive"
+download -fsSL "$cli_base/ast-cli_${CX_CLI_VERSION}_checksums.txt" -o "$WORKDIR/cli_checksums.txt"
+verify_checksum "$WORKDIR/$cli_archive" "$WORKDIR/cli_checksums.txt" "$cli_archive"
+tar -xzf "$WORKDIR/$cli_archive" -C "$WORKDIR"
 chmod +x "$WORKDIR/cx"
 
-# remove any stale report so its presence below means this scan produced it
-rm -f cx_result.json
+# The report is written to the (fresh, temporary) work directory rather than the scanned source
+# directory, so a stale report left in a cached or persisted workspace can never be mistaken
+# for this scan's, and nothing is added to the customer's checkout.
+report="$WORKDIR/cx_result.json"
 
 scan_rc=0
-run_cx scan create --project-name "$PROJECT_NAME" -s . --branch "$BRANCH" --threshold "sast-critical=1;sast-high=1;sca-critical=1;sca-high=1;iac-security-critical=1;iac-security-high=1;api-security-critical=1;api-security-high=1;containers-critical=1;containers-high=1;sscs-secret-detection-critical=1;sscs-secret-detection-high=1;sscs-scorecard-critical=1;sscs-scorecard-high=1" --report-format json || scan_rc=$?
+run_cx scan create --project-name "$PROJECT_NAME" -s . --branch "$BRANCH" --threshold "sast-critical=1;sast-high=1;sca-critical=1;sca-high=1;iac-security-critical=1;iac-security-high=1;api-security-critical=1;api-security-high=1;containers-critical=1;containers-high=1;sscs-secret-detection-critical=1;sscs-secret-detection-high=1;sscs-scorecard-critical=1;sscs-scorecard-high=1" --report-format json --output-path "$WORKDIR" || scan_rc=$?
 
 if [ "$scan_rc" -eq 0 ]; then
     exit 0
 fi
 
-if [ ! -f cx_result.json ]; then
+if [ ! -f "$report" ]; then
     # no report was produced, so the scan itself failed (auth, network, download...) rather than breaking the threshold
-    echo "Scan failed with exit code $scan_rc and produced no cx_result.json" >&2
+    echo "Scan failed with exit code $scan_rc and produced no report" >&2
     exit "$scan_rc"
 fi
 
 # --- Triage and remediate --------------------------------------------------
 echo "Threshold exceeded"
-if ! download -fsSL https://github.com/cx-michael-kubiaczyk/cx1-scan-remediate/releases/download/v0.0.10/cx1scanremediate -o "$WORKDIR/cx1scanremediate"; then
+# The latest release of this tool unless CX1SR_VERSION pins one (e.g. v0.0.11)
+CX1SR_VERSION="${CX1SR_VERSION:-}"
+if [ -z "$CX1SR_VERSION" ]; then
+    CX1SR_VERSION=$(latest_tag cx-michael-kubiaczyk/cx1-scan-remediate) || { echo "The threshold failure stands" >&2; exit "$scan_rc"; }
+fi
+tool_base="https://github.com/cx-michael-kubiaczyk/cx1-scan-remediate/releases/download/$CX1SR_VERSION"
+tool_asset="cx1scanremediate_${tool_platform}"
+if ! download -fsSL "$tool_base/$tool_asset" -o "$WORKDIR/cx1scanremediate" ||
+   ! download -fsSL "$tool_base/checksums.txt" -o "$WORKDIR/tool_checksums.txt"; then
     echo "Could not download cx1scanremediate; the threshold failure stands" >&2
     exit "$scan_rc"
 fi
+verify_checksum "$WORKDIR/cx1scanremediate" "$WORKDIR/tool_checksums.txt" "$tool_asset"
 chmod +x "$WORKDIR/cx1scanremediate"
 
 # Optional arguments are built as positional parameters so values with spaces survive.
@@ -106,17 +170,18 @@ if [ -n "$insecure" ]; then set -- "$@" -insecure; fi
 if [ -n "$cacert" ]; then set -- "$@" -caCert "$cacert"; fi
 case "${CX1SR_NO_KEEPALIVE:-}" in true|TRUE|True|1) set -- "$@" -noKeepAlive ;; esac
 
-# TODO: the pinned v0.0.8 binary does not read the CX_* variables, so the Cx1 and GitHub
-# credentials are still passed as flags here. After re-pinning to a release that does, drop
-# -cx1/-iam/-tenant/-client/-secret/-apikey/-githubToken and let it read the environment.
-if [ -n "$CX_APIKEY" ]; then
-    set -- "$@" -apikey "$CX_APIKEY"
-else
-    set -- "$@" -iam "$CX_BASE_AUTH_URI" -tenant "$CX_TENANT" -client "$CX_CLIENT_ID" -secret "$CX_CLIENT_SECRET"
-fi
-
+# Credentials are not passed as flags (they would show up in the process list and in "set -x"
+# logs). The tool reads CX_BASE_URI, CX_BASE_AUTH_URI, CX_TENANT, CX_CLIENT_ID,
+# CX_CLIENT_SECRET and CX_APIKEY from the environment (already exported above), and the
+# GitHub token from GITHUB_TOKEN, which is set for the tool's process only.
+# When an API key is used, the client credentials are removed from the tool's environment so
+# it never has two methods to choose from.
 tool_rc=0
-"$WORKDIR/cx1scanremediate" -cx1 "$CX_BASE_URI" -triage 5 -remediate 1 -baseBranch "$BRANCH" -githubToken "$GH_PR_PAT" -repo "$GH_REPO_URL" -engine "sast,sca" -severity "CRITICAL,HIGH" "$@" || tool_rc=$?
+if [ -n "$CX_APIKEY" ]; then
+    GITHUB_TOKEN="$GH_PR_PAT" env -u CX_CLIENT_ID -u CX_CLIENT_SECRET "$WORKDIR/cx1scanremediate" -triage 5 -remediate 1 -input "$report" -baseBranch "$BRANCH" -repo "$GH_REPO_URL" -engine "sast,sca" -severity "CRITICAL,HIGH" "$@" || tool_rc=$?
+else
+    GITHUB_TOKEN="$GH_PR_PAT" "$WORKDIR/cx1scanremediate" -triage 5 -remediate 1 -input "$report" -baseBranch "$BRANCH" -repo "$GH_REPO_URL" -engine "sast,sca" -severity "CRITICAL,HIGH" "$@" || tool_rc=$?
+fi
 
 # the gate was broken, so never pass: preserve the tool's failure, or fall back to the CLI's exit code
 if [ "$tool_rc" -ne 0 ]; then

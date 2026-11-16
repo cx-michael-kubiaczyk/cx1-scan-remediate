@@ -69,6 +69,7 @@ func exitCodeFor(operationErrors int) int {
 
 // finish ends the run with a non-zero exit code so the calling pipeline still fails.
 func finish(logger *logrus.Logger) {
+	logRemainingSummary(logger)
 	code := exitCodeFor(operationErrors)
 	if code == exitError {
 		logger.Errorf("Finished with %d error(s); exiting with code %d", operationErrors, code)
@@ -237,6 +238,9 @@ func main() {
 	inScopeCount := 0
 
 	logger.Infof("Scan has %d SAST and %d SCA", len(results.SAST), len(results.SCA))
+
+	// remembered so that finish can report what still counts against the threshold, per engine
+	summaryResults, summarySeverities, summaryEngines = &results, severities, inScope
 
 	if inScope.SAST {
 		for _, r := range results.SAST {
