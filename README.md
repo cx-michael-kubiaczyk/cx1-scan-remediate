@@ -49,7 +49,8 @@ curl -L https://raw.githubusercontent.com/cx-michael-kubiaczyk/cx1-scan-remediat
 ```
 
 This script will do the following:
-1. Download & unpack the CheckmarxOne ast-cli (https://github.com/Checkmarx/ast-cli/releases/latest/download/ast-cli_linux_x64.tar.gz)
+0. Detect the platform (Linux x86_64 or arm64; anything else stops with exit code 2)
+1. Download the latest CheckmarxOne ast-cli (https://github.com/Checkmarx/ast-cli/releases), verify its SHA-256 against the checksums file published with that release (the script stops with exit code 3 on a mismatch), and unpack it
 2. Run a scan with all engines against the pipeline's source code using CheckmarxOne, failing if there is any Critical or High result (thresholds are set per engine)
 3. If the scan fails, it will download the cx1scanremediate binary from this repository's releases
 4. Run the cx1scanremediate tool to trigger CheckmarxOne AI-Triage on up to 5 Critical/High SAST and SCA findings in the To_Verify state, then AI-Remediation on the most-severe Confirmed or Urgent finding (if any)
@@ -66,6 +67,8 @@ The script takes variables from the pipeline for each step (CheckmarxOne URLs & 
 - CX_CLIENT_ID: OIDC Client ID to use for connecting to CheckmarxOne (older name: CX1_CLIENT)
 - CX_CLIENT_SECRET: OIDC Client Secret to use for connecting to CheckmarxOne (older name: CX1_SECRET)
 - CX_APIKEY: Optional API key, used instead of the client ID/secret/tenant/IAM URL (older name: CX1_APIKEY)
+- CX_CLI_VERSION: Optional AST CLI release tag to use instead of the latest, e.g. 2.3.71
+- CX1SR_VERSION: Optional cx1-scan-remediate release tag to download, e.g. v0.0.11 (default: the latest release, as GitHub reports it - make sure each new release is marked "latest"); its SHA-256 is verified against the release's checksums.txt
 - CX1SR_PROXY: Optional proxy URL (e.g. http://proxy.corp:8080) used for the downloads, the AST CLI and the cx1-scan-remediate tool
 
 The `CX_*` variables are the ones the AST CLI reads itself, so the scan never has them on its command line. The cx1-scan-remediate tool is still given the credentials as flags by the script until the pinned version is updated to one that reads the environment.
