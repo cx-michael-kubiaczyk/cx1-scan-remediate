@@ -37,3 +37,4 @@ release:
   # Attach the CI helper script to the release alongside the binaries
   extra_files:
     - glob: ./scan_and_check.sh
+    - glob: ./scan_and_check.ps1

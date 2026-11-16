@@ -48,7 +48,14 @@ curl -L https://raw.githubusercontent.com/cx-michael-kubiaczyk/cx1-scan-remediat
   /tmp/scan_and_check.sh
 ```
 
-This script will do the following:
+On a Windows agent (x64) use `scan_and_check.ps1` from this repo or the release instead. It performs the same steps with the same environment variables, runs on Windows PowerShell 5.1 or PowerShell 7, and needs `curl.exe` (included with Windows 10 1803+ and Windows Server 2019+). It downloads `ast-cli_<version>_windows_x64.zip` and `cx1scanremediate_windows_amd64.exe`, verifies their checksums and uses the same exit codes. For example:
+```
+curl.exe -L https://raw.githubusercontent.com/cx-michael-kubiaczyk/cx1-scan-remediate/refs/heads/main/scan_and_check.ps1 -o scan_and_check.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scan_and_check.ps1
+```
+Windows on arm64 is not supported.
+
+The scripts do the following:
 0. Detect the platform (Linux x86_64 or arm64; anything else stops with exit code 2)
 1. Download the latest CheckmarxOne ast-cli (https://github.com/Checkmarx/ast-cli/releases), verify its SHA-256 against the checksums file published with that release (the script stops with exit code 3 on a mismatch), and unpack it
 2. Run a scan with all engines against the pipeline's source code using CheckmarxOne, failing if there is any Critical or High result (thresholds are set per engine). The JSON report is written to the script's temporary work directory (`--output-path`), not the scanned source directory, so a stale report in a cached workspace can never be picked up, and the tool is given it with `-input`
