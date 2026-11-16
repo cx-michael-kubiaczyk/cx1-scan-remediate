@@ -154,6 +154,12 @@ This tool is a Proof-of-Concept and has a number of limitations outlined below.
 | 2 | Invalid command line (unknown engine or log level, negative count, `-remediate` without a GitHub token, ...). Checked before anything is sent to Checkmarx One. |
 | 3 | An operational error: an API, patch, pull request or timeout failure, or a fatal error. |
 
+Before exiting (with any of the codes above once the report has been read), the tool logs a summary of the results in the scan report that still count against the threshold, per engine, for example:
+
+`Results from the scan report still counting against the threshold (...): SAST 3, SCA 12, Secret Detection 1 (not handled by this tool)`
+
+The summary counts results in the report whose severity is in `-severity` and whose state is not `NOT_EXPLOITABLE` (`PROPOSED_NOT_EXPLOITABLE` still counts, as a person has to confirm it). Engines this tool cannot triage or remediate, and result types the Cx1ClientGo library does not know ("Unknown"), are marked "not handled by this tool", so a threshold break caused only by, say, IaC or Secret Detection findings is easy to recognise. It approximates the AST CLI's threshold from the state recorded in the report: it does not change when this run triages findings or opens pull requests, and it only matches the pipeline's gate when `-severity` matches the threshold (the script uses Critical and High).
+
 # Limitations
 This tool has various limitations as it is intended for a Proof-of-Concept demonstration.
 1. Only SAST and SCA findings are processed; IaC is not currently supported by AI Triage/Remediation.
