@@ -126,19 +126,21 @@ verify_checksum "$WORKDIR/$cli_archive" "$WORKDIR/cli_checksums.txt" "$cli_archi
 tar -xzf "$WORKDIR/$cli_archive" -C "$WORKDIR"
 chmod +x "$WORKDIR/cx"
 
-# remove any stale report so its presence below means this scan produced it
-rm -f cx_result.json
+# The report is written to the (fresh, temporary) work directory rather than the scanned source
+# directory, so a stale report left in a cached or persisted workspace can never be mistaken
+# for this scan's, and nothing is added to the customer's checkout.
+report="$WORKDIR/cx_result.json"
 
 scan_rc=0
-run_cx scan create --project-name "$PROJECT_NAME" -s . --branch "$BRANCH" --threshold "sast-critical=1;sast-high=1;sca-critical=1;sca-high=1;iac-security-critical=1;iac-security-high=1;api-security-critical=1;api-security-high=1;containers-critical=1;containers-high=1;sscs-secret-detection-critical=1;sscs-secret-detection-high=1;sscs-scorecard-critical=1;sscs-scorecard-high=1" --report-format json || scan_rc=$?
+run_cx scan create --project-name "$PROJECT_NAME" -s . --branch "$BRANCH" --threshold "sast-critical=1;sast-high=1;sca-critical=1;sca-high=1;iac-security-critical=1;iac-security-high=1;api-security-critical=1;api-security-high=1;containers-critical=1;containers-high=1;sscs-secret-detection-critical=1;sscs-secret-detection-high=1;sscs-scorecard-critical=1;sscs-scorecard-high=1" --report-format json --output-path "$WORKDIR" || scan_rc=$?
 
 if [ "$scan_rc" -eq 0 ]; then
     exit 0
 fi
 
-if [ ! -f cx_result.json ]; then
+if [ ! -f "$report" ]; then
     # no report was produced, so the scan itself failed (auth, network, download...) rather than breaking the threshold
-    echo "Scan failed with exit code $scan_rc and produced no cx_result.json" >&2
+    echo "Scan failed with exit code $scan_rc and produced no report" >&2
     exit "$scan_rc"
 fi
 
@@ -176,9 +178,9 @@ case "${CX1SR_NO_KEEPALIVE:-}" in true|TRUE|True|1) set -- "$@" -noKeepAlive ;; 
 # it never has two methods to choose from.
 tool_rc=0
 if [ -n "$CX_APIKEY" ]; then
-    GITHUB_TOKEN="$GH_PR_PAT" env -u CX_CLIENT_ID -u CX_CLIENT_SECRET "$WORKDIR/cx1scanremediate" -triage 5 -remediate 1 -baseBranch "$BRANCH" -repo "$GH_REPO_URL" -engine "sast,sca" -severity "CRITICAL,HIGH" "$@" || tool_rc=$?
+    GITHUB_TOKEN="$GH_PR_PAT" env -u CX_CLIENT_ID -u CX_CLIENT_SECRET "$WORKDIR/cx1scanremediate" -triage 5 -remediate 1 -input "$report" -baseBranch "$BRANCH" -repo "$GH_REPO_URL" -engine "sast,sca" -severity "CRITICAL,HIGH" "$@" || tool_rc=$?
 else
-    GITHUB_TOKEN="$GH_PR_PAT" "$WORKDIR/cx1scanremediate" -triage 5 -remediate 1 -baseBranch "$BRANCH" -repo "$GH_REPO_URL" -engine "sast,sca" -severity "CRITICAL,HIGH" "$@" || tool_rc=$?
+    GITHUB_TOKEN="$GH_PR_PAT" "$WORKDIR/cx1scanremediate" -triage 5 -remediate 1 -input "$report" -baseBranch "$BRANCH" -repo "$GH_REPO_URL" -engine "sast,sca" -severity "CRITICAL,HIGH" "$@" || tool_rc=$?
 fi
 
 # the gate was broken, so never pass: preserve the tool's failure, or fall back to the CLI's exit code

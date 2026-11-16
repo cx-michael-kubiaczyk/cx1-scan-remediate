@@ -51,7 +51,7 @@ curl -L https://raw.githubusercontent.com/cx-michael-kubiaczyk/cx1-scan-remediat
 This script will do the following:
 0. Detect the platform (Linux x86_64 or arm64; anything else stops with exit code 2)
 1. Download the latest CheckmarxOne ast-cli (https://github.com/Checkmarx/ast-cli/releases), verify its SHA-256 against the checksums file published with that release (the script stops with exit code 3 on a mismatch), and unpack it
-2. Run a scan with all engines against the pipeline's source code using CheckmarxOne, failing if there is any Critical or High result (thresholds are set per engine)
+2. Run a scan with all engines against the pipeline's source code using CheckmarxOne, failing if there is any Critical or High result (thresholds are set per engine). The JSON report is written to the script's temporary work directory (`--output-path`), not the scanned source directory, so a stale report in a cached workspace can never be picked up, and the tool is given it with `-input`
 3. If the scan fails, it will download the cx1scanremediate binary from this repository's releases
 4. Run the cx1scanremediate tool to trigger CheckmarxOne AI-Triage on up to 5 Critical/High SAST and SCA findings in the To_Verify state, then AI-Remediation on the most-severe Confirmed or Urgent finding (if any)
 5. Once a code-remediation is available, apply the code fix and raise a pull request against the original repository
