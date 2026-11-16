@@ -106,17 +106,18 @@ if [ -n "$insecure" ]; then set -- "$@" -insecure; fi
 if [ -n "$cacert" ]; then set -- "$@" -caCert "$cacert"; fi
 case "${CX1SR_NO_KEEPALIVE:-}" in true|TRUE|True|1) set -- "$@" -noKeepAlive ;; esac
 
-# TODO: the pinned v0.0.8 binary does not read the CX_* variables, so the Cx1 and GitHub
-# credentials are still passed as flags here. After re-pinning to a release that does, drop
-# -cx1/-iam/-tenant/-client/-secret/-apikey/-githubToken and let it read the environment.
-if [ -n "$CX_APIKEY" ]; then
-    set -- "$@" -apikey "$CX_APIKEY"
-else
-    set -- "$@" -iam "$CX_BASE_AUTH_URI" -tenant "$CX_TENANT" -client "$CX_CLIENT_ID" -secret "$CX_CLIENT_SECRET"
-fi
-
+# Credentials are not passed as flags (they would show up in the process list and in "set -x"
+# logs). The tool reads CX_BASE_URI, CX_BASE_AUTH_URI, CX_TENANT, CX_CLIENT_ID,
+# CX_CLIENT_SECRET and CX_APIKEY from the environment (already exported above), and the
+# GitHub token from GITHUB_TOKEN, which is set for the tool's process only.
+# When an API key is used, the client credentials are removed from the tool's environment so
+# it never has two methods to choose from.
 tool_rc=0
-"$WORKDIR/cx1scanremediate" -cx1 "$CX_BASE_URI" -triage 5 -remediate 1 -baseBranch "$BRANCH" -githubToken "$GH_PR_PAT" -repo "$GH_REPO_URL" -engine "sast,sca" -severity "CRITICAL,HIGH" "$@" || tool_rc=$?
+if [ -n "$CX_APIKEY" ]; then
+    GITHUB_TOKEN="$GH_PR_PAT" env -u CX_CLIENT_ID -u CX_CLIENT_SECRET "$WORKDIR/cx1scanremediate" -triage 5 -remediate 1 -baseBranch "$BRANCH" -repo "$GH_REPO_URL" -engine "sast,sca" -severity "CRITICAL,HIGH" "$@" || tool_rc=$?
+else
+    GITHUB_TOKEN="$GH_PR_PAT" "$WORKDIR/cx1scanremediate" -triage 5 -remediate 1 -baseBranch "$BRANCH" -repo "$GH_REPO_URL" -engine "sast,sca" -severity "CRITICAL,HIGH" "$@" || tool_rc=$?
+fi
 
 # the gate was broken, so never pass: preserve the tool's failure, or fall back to the CLI's exit code
 if [ "$tool_rc" -ne 0 ]; then

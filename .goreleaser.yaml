@@ -28,6 +28,11 @@ archives:
     formats: [binary]
     ids: [linux]
     name_template: "{{ .Binary }}"
+  # Raw Windows binary, published as "cx1scanremediate.exe" (goreleaser appends .exe)
+  - id: bin-windows
+    formats: [binary]
+    ids: [windows]
+    name_template: "{{ .Binary }}"
 
 checksum:
   name_template: "checksums.txt"
