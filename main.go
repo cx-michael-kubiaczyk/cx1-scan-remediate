@@ -31,6 +31,9 @@ type resultIndex struct {
 	// AI is what AI Triage said about this finding, if it was triaged in this run. It is only an
 	// expectation to compare the platform's state against, never used as the state.
 	AI *aiAssessment
+	// Refreshed is true if State was last confirmed against the results re-read from the platform
+	// (the finding was found in them), as opposed to being the state from the scan report.
+	Refreshed bool
 	// Result is the originating results.SAST / IAC / SCA entry, kept for its String() in log output.
 	Result fmt.Stringer
 }
@@ -368,7 +371,7 @@ func main() {
 			triageBatchOf(cx1client, logger, &scan, batch, aiBudget, clientVars)
 		}
 
-		if len(candidates) > 0 {
+		if useRefetchedStates && len(candidates) > 0 {
 			// Whether a finding is exploitable is decided by the platform, so re-read the results
 			// now that AI Triage has finished instead of interpreting its labels here.
 			if err := refreshStates(logger, fetchResultsFor(cx1client, scan.ScanID, severities), index, aiBudget, stateRetryDelay, time.Sleep); err != nil {
@@ -534,6 +537,9 @@ func triageBatchOf(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger, scan
 			}
 			logger.Infof("AI Triage results: exploitability %s, reachability %s", details.Analysis.Exploitability.Status, details.Analysis.Reachability.Status)
 			finding.AI = &aiAssessment{Exploitability: details.Analysis.Exploitability.Status, Reachability: details.Analysis.Reachability.Status}
+			if !useRefetchedStates {
+				finding.State = aiTriageState(logger, "AI Triage of "+finding.String(), details.Analysis.Exploitability.Status, details.Analysis.Reachability.Status, finding.State)
+			}
 			continue
 		}
 
@@ -544,6 +550,9 @@ func triageBatchOf(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger, scan
 		}
 		logger.Infof("AI Triage results: %s (reachability %s)", details.TriageStatus, details.ReachabilityStatus)
 		finding.AI = &aiAssessment{Exploitability: details.TriageStatus, Reachability: details.ReachabilityStatus}
+		if !useRefetchedStates {
+			finding.State = aiTriageState(logger, "AI Triage of "+finding.String(), details.TriageStatus, details.ReachabilityStatus, finding.State)
+		}
 	}
 }
 

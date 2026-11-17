@@ -24,7 +24,7 @@ func TestDescribeRun(t *testing.T) {
 	got := strings.Join(describeRun(index, c), "\n")
 
 	for _, want := range []string{
-		"3 finding(s) triaged; the platform now reports CONFIRMED 1, PROPOSED_NOT_EXPLOITABLE 2",
+		"3 finding(s) triaged; resulting states: CONFIRMED 1, PROPOSED_NOT_EXPLOITABLE 2",
 		"requested for 1 finding(s), 1 pull request(s) opened, 1 Confirmed/Urgent finding(s) skipped because their branch already exists",
 		"2 To_Verify finding(s) not triaged yet, 2 Confirmed/Urgent finding(s) not remediated yet (of 4 Confirmed/Urgent in total)",
 	} {
