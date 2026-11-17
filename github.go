@@ -299,6 +299,7 @@ func publishRemediationPR(logger *logrus.Logger, result Cx1ClientGo.AIRemediatio
 		return
 	}
 
+	run.PRsOpened++
 	logger.Infof("Created pull request: %s", htmlURL)
 }
 
