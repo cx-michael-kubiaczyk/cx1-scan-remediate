@@ -28,6 +28,9 @@ type resultIndex struct {
 	// PackageID is the SCA package identifier; only set for SCA results.
 	PackageID string
 	State     string
+	// AI is what AI Triage said about this finding, if it was triaged in this run. It is only an
+	// expectation to compare the platform's state against, never used as the state.
+	AI *aiAssessment
 	// Result is the originating results.SAST / IAC / SCA entry, kept for its String() in log output.
 	Result fmt.Stringer
 }
@@ -362,6 +365,14 @@ func main() {
 			}
 			triageBatchOf(cx1client, logger, &scan, batch, aiBudget, clientVars)
 		}
+
+		if len(candidates) > 0 {
+			// Whether a finding is exploitable is decided by the platform, so re-read the results
+			// now that AI Triage has finished instead of interpreting its labels here.
+			if err := refreshStates(logger, fetchResultsFor(cx1client, scan.ScanID, severities), index, aiBudget, stateRetryDelay, time.Sleep); err != nil {
+				recordError(logger, "Could not re-read the scan results after AI Triage (%s); findings keep the state from the scan report, so none become eligible for AI Remediation because of the triage", err)
+			}
+		}
 	}
 
 	if *numRemediate > 0 {
@@ -507,25 +518,26 @@ func triageBatchOf(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger, scan
 			logger.Infof("AI Triage for %s finished with status: %s", finding, status)
 		}
 
+		// The AI's assessment is only logged for information: the finding's state is read back
+		// from the platform once the whole triage is done (see refreshStates).
 		if finding.Engine == "sca" {
 			details, err := cx1client.GetSCAAITriage(scan.ScanID, scan.ProjectID, finding.SimilarityID, finding.PackageID)
 			if err != nil {
-				recordError(logger, "Failed to get AI Triage results for %s: %s", finding, err)
+				logger.Warnf("Could not get the AI Triage assessment for %s: %s", finding, err)
 				continue
 			}
 			logger.Infof("AI Triage results: exploitability %s, reachability %s", details.Analysis.Exploitability.Status, details.Analysis.Reachability.Status)
-			// an empty or unrecognized status leaves the state as-is (with a warning)
-			finding.State = aiTriageState(logger, "AI Triage of "+finding.String(), details.Analysis.Exploitability.Status, details.Analysis.Reachability.Status, finding.State)
+			finding.AI = &aiAssessment{Exploitability: details.Analysis.Exploitability.Status, Reachability: details.Analysis.Reachability.Status}
 			continue
 		}
 
 		details, err := cx1client.GetSASTAITriage(scan.ProjectID, finding.SimilarityID)
 		if err != nil {
-			recordError(logger, "Failed to get AI Triage results for %s: %s", finding, err)
+			logger.Warnf("Could not get the AI Triage assessment for %s: %s", finding, err)
 			continue
 		}
 		logger.Infof("AI Triage results: %s (reachability %s)", details.TriageStatus, details.ReachabilityStatus)
-		finding.State = aiTriageState(logger, "AI Triage of "+finding.String(), details.TriageStatus, details.ReachabilityStatus, finding.State)
+		finding.AI = &aiAssessment{Exploitability: details.TriageStatus, Reachability: details.ReachabilityStatus}
 	}
 }
 

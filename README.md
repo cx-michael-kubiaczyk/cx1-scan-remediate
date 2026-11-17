@@ -28,7 +28,7 @@ A remediation is all-or-nothing: if any of its changes cannot be applied, no PR 
 ## Notes
 - By default only one finding is triaged (`-triage 1`) and is remediated (`-remediate 1`), to avoid burning AI tokens. Both are configurable.
 - AI Triage / AI Remediation requests are sent in batches of at most 5 findings (`-triageBatch` / `-remediationBatch`). `-remediate` and `-triage` themselves are not capped, so a larger number is simply split into several batches. The batch limit of 5 is hard-coded as it is the size the AI backends are known to handle.
-- Triage runs before remediation, and its outcome is taken into account: a To_Verify finding that triage moves to Confirmed or Urgent can be remediated in the same run, while any other finding left in To_Verify (or Not_Exploitable) is not remediated.
+- Triage runs before remediation, and its outcome is taken into account (after triage the tool re-reads the scan's results from Checkmarx One, so the state it acts on is the one the platform reports, not the AI's own label; if that call fails, the findings keep their state from the scan report and none are remediated because of the triage): a To_Verify finding that triage moves to Confirmed or Urgent can be remediated in the same run, while any other finding left in To_Verify (or Not_Exploitable) is not remediated.
 
 A GitHub token is required when using -remediate; the tool exits before submitting anything to CheckmarxOne if none is available.
 
