@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/cxpsemea/Cx1ClientGo"
@@ -120,6 +121,67 @@ func logRemainingSummary(logger *logrus.Logger) {
 	if summaryResults == nil {
 		return
 	}
+	for _, line := range describeRun(summaryIndex, run) {
+		logger.Info(line)
+	}
 	counts := remainingByEngine(summaryResults, summarySeverities, summaryEngines)
 	logger.Warnf("Results from the scan report still counting against the threshold (-severity matches, state not NOT_EXPLOITABLE; PROPOSED_NOT_EXPLOITABLE still counts): %s", formatRemaining(counts))
+}
+
+// runCounters records what this run did, for the summary logged on exit.
+type runCounters struct {
+	Requested    map[string]bool // findings AI Remediation was requested for
+	BranchExists map[string]bool // verified findings skipped because their pull request branch already exists
+	PRsOpened    int
+}
+
+var (
+	run          = runCounters{Requested: map[string]bool{}, BranchExists: map[string]bool{}}
+	summaryIndex []resultIndex // the findings this tool handles; their states are the current ones
+)
+
+func findingKey(f *resultIndex) string { return f.Engine + "/" + f.AlternateID }
+
+// describeRun summarizes what this run did with the findings it handles (the -engine and
+// -severity selection): what AI Triage concluded, what was remediated, and what is still waiting
+// for a later run. Nothing here is a priority or a gate; every in-scope finding has to be
+// addressed eventually, so the order in which runs get to them does not matter.
+func describeRun(index []resultIndex, c runCounters) []string {
+	triaged := map[string]int{}
+	nTriaged, notTriaged, verified, notRemediated := 0, 0, 0, 0
+	for i := range index {
+		f := &index[i]
+		if f.AI != nil {
+			nTriaged++
+			triaged[f.State]++
+		} else if f.State == stateToVerify {
+			notTriaged++
+		}
+		if isVerified(f) {
+			verified++
+			if !c.Requested[findingKey(f)] && !c.BranchExists[findingKey(f)] {
+				notRemediated++
+			}
+		}
+	}
+
+	states := make([]string, 0, len(triaged))
+	for s := range triaged {
+		states = append(states, s)
+	}
+	slices.Sort(states)
+	outcome := make([]string, 0, len(states))
+	for _, s := range states {
+		outcome = append(outcome, fmt.Sprintf("%s %d", s, triaged[s]))
+	}
+
+	lines := []string{}
+	if nTriaged == 0 {
+		lines = append(lines, "AI Triage: no findings were triaged in this run")
+	} else {
+		lines = append(lines, fmt.Sprintf("AI Triage: %d finding(s) triaged; the platform now reports %s", nTriaged, strings.Join(outcome, ", ")))
+	}
+	lines = append(lines, fmt.Sprintf("AI Remediation: requested for %d finding(s), %d pull request(s) opened, %d Confirmed/Urgent finding(s) skipped because their branch already exists", len(c.Requested), c.PRsOpened, len(c.BranchExists)))
+	lines = append(lines, fmt.Sprintf("Still to do in later runs (in scope for this tool): %d To_Verify finding(s) not triaged yet, %d Confirmed/Urgent finding(s) not remediated yet (of %d Confirmed/Urgent in total)", notTriaged, notRemediated, verified))
+	return lines
 }

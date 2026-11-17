@@ -347,6 +347,8 @@ func main() {
 		return cmp.Compare(a.AlternateID, b.AlternateID)
 	})
 
+	summaryIndex = index // the states in it are updated as the run goes on; finish summarizes them
+
 	clientVars := cx1client.GetClientVars()
 	aiBudget := newBudget(*timeout)
 	if !aiBudget.unlimited() {
@@ -397,6 +399,7 @@ func main() {
 				recordError(logger, "Could not check whether branch %q exists for %s: %s; skipping it", branch, f, err)
 				return false
 			case exists:
+				run.BranchExists[findingKey(f)] = true
 				logger.Infof("Skipping %s: branch %q already exists in %s/%s (remediated by an earlier run); delete the branch to retry", f, branch, owner, repo)
 				return false
 			}
@@ -404,6 +407,9 @@ func main() {
 		}
 
 		candidates := pickFindings(index, *numRemediate, eligible)
+		for _, c := range candidates {
+			run.Requested[findingKey(c)] = true
+		}
 		batchSize := clampBatchSize(logger, "remediationBatch", *remediationBatch)
 		logger.Infof("Will auto-remediate %d results (requested %d, out of %d) in batches of up to %d", len(candidates), *numRemediate, len(index), batchSize)
 

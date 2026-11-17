@@ -193,7 +193,12 @@ Before exiting (with any of the codes above once the report has been read), the 
 
 The summary counts results in the report whose severity is in `-severity` and whose state is not `NOT_EXPLOITABLE` (`PROPOSED_NOT_EXPLOITABLE` still counts, as a person has to confirm it). Engines this tool cannot triage or remediate, and result types the Cx1ClientGo library does not know ("Unknown"), are marked "not handled by this tool", so a threshold break caused only by, say, IaC or Secret Detection findings is easy to recognise. It approximates the AST CLI's threshold from the state recorded in the report: it does not change when this run triages findings or opens pull requests, and it only matches the pipeline's gate when `-severity` matches the threshold (the script uses Critical and High).
 
+The summary is preceded by three lines about what this run did with the findings it handles: what AI Triage concluded (the states the platform now reports for the findings it triaged), how many remediations were requested and pull requests opened (and how many Confirmed/Urgent findings were skipped because their branch already exists), and what is still waiting for a later run (To_Verify findings not yet triaged, Confirmed/Urgent findings not yet remediated). Together they show why the pipeline still fails and how far along the backlog is.
+
 # Limitations
 This tool has various limitations as it is intended for a Proof-of-Concept demonstration.
 1. Only SAST and SCA findings are processed; IaC is not currently supported by AI Triage/Remediation.
 2. If two remediations change overlapping lines of the same file, the second PR to be merged will have a merge conflict.
+
+# Roadmap
+- Smarter selection of which findings to triage and remediate first. Today findings are taken most severe first, with ties broken by the platform's `alternateId`, which is arbitrary. The expectation is that a project does not go live with any in-scope finding, so the order matters little, but it could take risk signals into account (SAST query severity and confidence, SCA CVSS or exploit prediction, reachability).
