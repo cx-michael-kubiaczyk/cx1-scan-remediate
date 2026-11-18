@@ -130,7 +130,7 @@ func main() {
 	iamURL := flag.String("iam", "", "Checkmarx One IAM URL (falls back to CX_BASE_AUTH_URI)")
 	tenant := flag.String("tenant", "", "Checkmarx One tenant (falls back to CX_TENANT)")
 	token := flag.String("token", "", "Optional: A valid access_token. If this value is provided, others will be ignored - the client will lose access when the token expires")
-	userAgent := flag.String("useragent", "Cx1ClientGo", "Optional: A custom user-agent string for all requests to Cx1")
+	userAgent := flag.String("useragent", "cxscanremediate/"+version, "Optional: A custom user-agent string for all requests to Checkmarx One")
 
 	flag.Parse()
 
