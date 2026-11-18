@@ -1,4 +1,4 @@
-module cx1scanremediate
+module cxscanremediate
 
 go 1.26.3
 

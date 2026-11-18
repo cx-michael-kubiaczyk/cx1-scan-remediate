@@ -130,3 +130,20 @@ func TestSeverityList(t *testing.T) {
 		t.Errorf("got %v", got)
 	}
 }
+
+func TestAITriageState(t *testing.T) {
+	logger := logrus.New()
+	logger.SetOutput(io.Discard)
+	for _, c := range []struct{ exploitability, reachability, want string }{
+		{"NOT_EXPLOITABLE", "REACHABLE", "PROPOSED_NOT_EXPLOITABLE"},
+		{"CONFIRMED", "NOT_REACHABLE", "PROPOSED_NOT_EXPLOITABLE"},
+		{"CONFIRMED", "REACHABLE", "CONFIRMED"},
+		{"EXPLOITABLE", "REACHABLE", "CONFIRMED"},
+		{"EXPLOITABLE", "NOT_REACHABLE", "PROPOSED_NOT_EXPLOITABLE"},
+		{"false_positive", "REACHABLE", "TO_VERIFY"}, // not a state: keeps the fallback
+	} {
+		if got := aiTriageState(logger, "t", c.exploitability, c.reachability, "TO_VERIFY"); got != c.want {
+			t.Errorf("aiTriageState(%s, %s) = %s, want %s", c.exploitability, c.reachability, got, c.want)
+		}
+	}
+}

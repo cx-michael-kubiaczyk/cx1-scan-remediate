@@ -41,7 +41,7 @@ The token (`GH_PR_PAT` in the scripts, `-githubToken` or `GITHUB_TOKEN` for the 
 | Classic personal access token | `repo` for a private repository, or `public_repo` for a public one |
 
 Notes:
-- The token only creates new branches (named `cx1-remediate/<engine>-<id>` by default) and pull requests. It never pushes to the base branch, and the tool never deletes a branch.
+- The token only creates new branches (named `cx-remediate/<engine>-<id>` by default) and pull requests. It never pushes to the base branch, and the tool never deletes a branch.
 - Before any AI Triage or Remediation credits are spent, the tool checks that the repository is reachable, that the token can write to it (when GitHub reports permissions for the token type), and that the base branch exists. A problem with the token stops the run with exit code 2 (or 3 if GitHub cannot be reached).
 - In an organization that enforces SAML single sign-on, a classic token must also be authorized for that organization; a fine-grained token must have the organization as its resource owner and be approved if the organization requires it.
 - If branch protection or rulesets restrict who can create branches or open pull requests from branches matching the prefix, the token's owner must be allowed to.
@@ -74,7 +74,7 @@ curl -L https://raw.githubusercontent.com/cx-michael-kubiaczyk/cx1-scan-remediat
   /tmp/scan_and_check.sh
 ```
 
-On a Windows agent (x64) use `scan_and_check.ps1` from this repo or the release instead. It performs the same steps with the same environment variables, runs on Windows PowerShell 5.1 or PowerShell 7, and needs `curl.exe` (included with Windows 10 1803+ and Windows Server 2019+). It downloads `ast-cli_<version>_windows_x64.zip` and `cx1scanremediate_windows_amd64.exe`, verifies their checksums and uses the same exit codes. For example:
+On a Windows agent (x64) use `scan_and_check.ps1` from this repo or the release instead. It performs the same steps with the same environment variables, runs on Windows PowerShell 5.1 or PowerShell 7, and needs `curl.exe` (included with Windows 10 1803+ and Windows Server 2019+). It downloads `ast-cli_<version>_windows_x64.zip` and `cxscanremediate_windows_amd64.exe`, verifies their checksums and uses the same exit codes. For example:
 ```
 curl.exe -L https://raw.githubusercontent.com/cx-michael-kubiaczyk/cx1-scan-remediate/refs/heads/main/scan_and_check.ps1 -o scan_and_check.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scan_and_check.ps1
@@ -85,8 +85,8 @@ The scripts do the following:
 0. Detect the platform (Linux x86_64 or arm64; anything else stops with exit code 2)
 1. Download the latest Checkmarx One ast-cli (https://github.com/Checkmarx/ast-cli/releases), verify its SHA-256 against the checksums file published with that release (the script stops with exit code 3 on a mismatch), and unpack it
 2. Run a scan with all engines against the pipeline's source code using Checkmarx One, failing if there is any Critical or High result (thresholds are set per engine). The JSON report is written to the script's temporary work directory (`--output-path`), not the scanned source directory, so a stale report in a cached workspace can never be picked up, and the tool is given it with `-input`
-3. If the scan fails, it will download the cx1scanremediate binary from this repository's releases
-4. Run the cx1scanremediate tool to trigger Checkmarx One AI-Triage on up to 5 Critical/High SAST and SCA findings in the To_Verify state, then AI-Remediation on the most-severe Confirmed or Urgent finding (if any)
+3. If the scan fails, it will download the cxscanremediate binary from this repository's releases
+4. Run the cxscanremediate tool to trigger Checkmarx One AI-Triage on up to 5 Critical/High SAST and SCA findings in the To_Verify state, then AI-Remediation on the most-severe Confirmed or Urgent finding (if any)
 5. Once a code-remediation is available, apply the code fix and raise a pull request against the original repository
 
 The script takes variables from the pipeline for each step (Checkmarx One URLs & credentials, Github URLs & PAT):
@@ -101,16 +101,16 @@ The script takes variables from the pipeline for each step (Checkmarx One URLs &
 - CX_CLIENT_SECRET: OIDC Client Secret to use for connecting to Checkmarx One (older name: CX1_SECRET)
 - CX_APIKEY: Optional API key, used instead of the client ID/secret/tenant/IAM URL (older name: CX1_APIKEY)
 - CX_CLI_VERSION: Optional AST CLI release tag to use instead of the latest, e.g. 2.3.71
-- CX1SR_VERSION: Optional cx1-scan-remediate release tag to download, e.g. v0.0.11 (default: the latest release, as GitHub reports it - make sure each new release is marked "latest"); its SHA-256 is verified against the release's checksums.txt
-- CX1SR_PROXY: Optional proxy URL (e.g. http://proxy.corp:8080) used for the downloads, the AST CLI and the cx1-scan-remediate tool
-- CX1SR_CACERT: Optional path to a PEM file with extra CA certificate(s) to trust, e.g. the CA of a TLS-inspecting proxy. Used for the downloads, the AST CLI (via SSL_CERT_FILE, which replaces the CLI's system roots) and the cx1-scan-remediate tool (-caCert, which adds to the system roots)
-- CX1SR_INSECURE: Optional; set to "true" to disable TLS certificate verification (not recommended; mutually exclusive with CX1SR_CACERT)
-- CX1SR_TIMEOUT: Optional overall time limit for AI Triage and AI Remediation as a duration, e.g. 45m (default: 30m; 0 for no limit)
-- CX1SR_NO_KEEPALIVE: Optional; set to "true" to disable HTTP connection reuse in the cx1-scan-remediate tool, for proxies that drop pooled connections (random EOF errors)
-- CX1SR_LOGLEVEL: Optional Log level to use for output by the cx1-scan-remediate tool (default: info)
-- CX1SR_DEBUG: Optional Debugging flag to retain diffs generated by Checkmarx One AI-Remediation - diffs are stored in temporary files (eg: in /tmp/) and are deleted automatically if this field is empty
+- CXSR_VERSION: Optional cx-scan-remediate release tag to download, e.g. v0.0.11 (default: the latest release, as GitHub reports it - make sure each new release is marked "latest"); its SHA-256 is verified against the release's checksums.txt
+- CXSR_PROXY: Optional proxy URL (e.g. http://proxy.corp:8080) used for the downloads, the AST CLI and the cx-scan-remediate tool
+- CXSR_CACERT: Optional path to a PEM file with extra CA certificate(s) to trust, e.g. the CA of a TLS-inspecting proxy. Used for the downloads, the AST CLI (via SSL_CERT_FILE, which replaces the CLI's system roots) and the cx-scan-remediate tool (-caCert, which adds to the system roots)
+- CXSR_INSECURE: Optional; set to "true" to disable TLS certificate verification (not recommended; mutually exclusive with CXSR_CACERT)
+- CXSR_TIMEOUT: Optional overall time limit for AI Triage and AI Remediation as a duration, e.g. 45m (default: 30m; 0 for no limit)
+- CXSR_NO_KEEPALIVE: Optional; set to "true" to disable HTTP connection reuse in the cx-scan-remediate tool, for proxies that drop pooled connections (random EOF errors)
+- CXSR_LOGLEVEL: Optional Log level to use for output by the cx-scan-remediate tool (default: info)
+- CXSR_DEBUG: Optional Debugging flag to retain diffs generated by Checkmarx One AI-Remediation - diffs are stored in temporary files (eg: in /tmp/) and are deleted automatically if this field is empty
 
-The `CX_*` variables are the ones the AST CLI reads itself, so the scan never has them on its command line. The cx1-scan-remediate tool reads them from the environment as well (and `GITHUB_TOKEN`, set from `GH_PR_PAT` for that process only), so no secret appears on a command line.
+The `CX_*` variables are the ones the AST CLI reads itself, so the scan never has them on its command line. The cx-scan-remediate tool reads them from the environment as well (and `GITHUB_TOKEN`, set from `GH_PR_PAT` for that process only), so no secret appears on a command line.
 
 The script exits non-zero whenever the scan breaks the threshold, whatever the AI steps do: AI Triage only ever proposes a state (a person still has to confirm it) and remediations are only pull requests. If the scan fails without producing a report (bad credentials, network error), the AST CLI's own exit code is returned.
 
@@ -123,7 +123,7 @@ This tool is a Proof-of-Concept and has a number of limitations outlined below.
         Checkmarx One API Key (if not using client id/secret; falls back to CX_APIKEY)
   -client string
         Checkmarx One Client ID (if not using API Key; falls back to CX_CLIENT_ID)
-  -cx1 string
+  -cx string
         Checkmarx One platform URL (falls back to CX_BASE_URI)
   -githubToken string
         GitHub token used to publish a pull request with the remediation changes (falls back to the GITHUB_TOKEN env var); required when using -remediate
@@ -153,7 +153,7 @@ This tool is a Proof-of-Concept and has a number of limitations outlined below.
   -triageBatch int
         Number of results submitted to AI Triage together in one request (1-5) (default 5)
   -prBranch string
-        Prefix for the names of the branches created for pull requests; each branch is this prefix plus the engine and result ID, e.g. cx1-remediate/sast-<id> (default prefix "cx1-remediate/"). A finding whose branch already exists was remediated by an earlier run and is skipped; delete the branch to retry
+        Prefix for the names of the branches created for pull requests; each branch is this prefix plus the engine and result ID, e.g. cx-remediate/sast-<id> (default prefix "cx-remediate/"). A finding whose branch already exists was remediated by an earlier run and is skipped; delete the branch to retry
   -remediate int
         Number of results to remediate, sorted by highest-priority and resultId; at most 25 per run (default 1)
   -remediationBatch int
@@ -165,13 +165,13 @@ This tool is a Proof-of-Concept and has a number of limitations outlined below.
 ## Misc  
 ```
   -caCert string
-        Optional: Path to a PEM file with extra CA certificate(s) to trust for calls to Cx1 and GitHub, e.g. the CA of a TLS-inspecting proxy; added to the system trust store
+        Optional: Path to a PEM file with extra CA certificate(s) to trust for calls to Checkmarx One and GitHub, e.g. the CA of a TLS-inspecting proxy; added to the system trust store
   -insecure
-        Optional: DISABLE TLS certificate verification for calls to Cx1 and GitHub (insecure; prefer -caCert)
+        Optional: DISABLE TLS certificate verification for calls to Checkmarx One and GitHub (insecure; prefer -caCert)
   -noKeepAlive
         Optional: Disable HTTP connection reuse (a new connection per request); use if a proxy drops pooled connections and calls fail with random EOF errors
   -proxy string
-        Optional: Proxy server (http, https or socks5 URL) for outbound calls to Cx1 and GitHub; defaults to the HTTPS_PROXY environment variable
+        Optional: Proxy server (http, https or socks5 URL) for outbound calls to Checkmarx One and GitHub; defaults to the HTTPS_PROXY environment variable
   -log string
         Log level: TRACE, DEBUG, INFO, WARNING, ERROR, FATAL; any other value is rejected (default "INFO")
   -timeout duration

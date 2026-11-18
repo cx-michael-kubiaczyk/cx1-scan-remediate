@@ -1,7 +1,7 @@
 # PowerShell version of scan_and_check.sh for Windows agents (Windows PowerShell 5.1 or PowerShell 7).
 #
 # Runs a Checkmarx One scan with the AST CLI and, if the scan breaks the threshold, runs
-# cx1scanremediate to triage and remediate findings and open pull requests. The exit code is
+# cxscanremediate to triage and remediate findings and open pull requests. The exit code is
 # never 0 after a threshold break: the CLI's failure (or the tool's) is always preserved.
 #
 # Exit codes: the AST CLI's own code, or 1/3 from the tool; 2 for a usage/configuration/platform
@@ -10,8 +10,8 @@
 # Configuration is the same as scan_and_check.sh (environment variables):
 #   required: PROJECT_NAME, BRANCH, CX_BASE_URI, GH_PR_PAT, and either CX_APIKEY or
 #             CX_BASE_AUTH_URI + CX_TENANT + CX_CLIENT_ID + CX_CLIENT_SECRET
-#   optional: GH_REPO_URL, CX1SR_PROXY, CX1SR_CACERT, CX1SR_INSECURE, CX1SR_LOGLEVEL,
-#             CX1SR_TIMEOUT, CX1SR_NO_KEEPALIVE, CX1SR_VERSION, CX_CLI_VERSION
+#   optional: GH_REPO_URL, CXSR_PROXY, CXSR_CACERT, CXSR_INSECURE, CXSR_LOGLEVEL,
+#             CXSR_TIMEOUT, CXSR_NO_KEEPALIVE, CXSR_VERSION, CX_CLI_VERSION
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -120,12 +120,12 @@ function Invoke-Main {
     }
 
     $ghRepoUrl = Get-Env @('GH_REPO_URL')
-    $script:Proxy = Get-Env @('CX1SR_PROXY')
-    $script:CaCert = Get-Env @('CX1SR_CACERT')
-    $script:Insecure = Test-Flag 'CX1SR_INSECURE'
-    if ($script:Insecure -and $script:CaCert) { Stop-Script 2 'CX1SR_INSECURE and CX1SR_CACERT are mutually exclusive' }
+    $script:Proxy = Get-Env @('CXSR_PROXY')
+    $script:CaCert = Get-Env @('CXSR_CACERT')
+    $script:Insecure = Test-Flag 'CXSR_INSECURE'
+    if ($script:Insecure -and $script:CaCert) { Stop-Script 2 'CXSR_INSECURE and CXSR_CACERT are mutually exclusive' }
     if ($script:CaCert -and -not (Test-Path -LiteralPath $script:CaCert -PathType Leaf)) {
-        Stop-Script 2 "CX1SR_CACERT file not found: $($script:CaCert)"
+        Stop-Script 2 "CXSR_CACERT file not found: $($script:CaCert)"
     }
     if (-not (Get-Command curl.exe -ErrorAction SilentlyContinue)) {
         Stop-Script 2 'curl.exe was not found; it ships with Windows 10 (1803+) and Windows Server 2019+'
@@ -139,9 +139,9 @@ function Invoke-Main {
         Stop-Script 2 "Unsupported platform ($arch): this script supports Windows on x64 only; use scan_and_check.sh on Linux"
     }
     $cliPlatform = 'windows_x64'
-    $toolAsset = 'cx1scanremediate_windows_amd64.exe'
+    $toolAsset = 'cxscanremediate_windows_amd64.exe'
 
-    $workDir = Join-Path ([IO.Path]::GetTempPath()) ('cx1sr-' + [Guid]::NewGuid().ToString('N'))
+    $workDir = Join-Path ([IO.Path]::GetTempPath()) ('cxsr-' + [Guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $workDir | Out-Null
     try {
         # --- Scan ----------------------------------------------------------
@@ -194,19 +194,19 @@ function Invoke-Main {
 
         # --- Triage and remediate ------------------------------------------
         Write-Host 'Threshold exceeded'
-        # The latest release of this tool unless CX1SR_VERSION pins one (e.g. v0.0.11)
-        $toolVersion = Get-Env @('CX1SR_VERSION')
+        # The latest release of this tool unless CXSR_VERSION pins one (e.g. v0.0.11)
+        $toolVersion = Get-Env @('CXSR_VERSION')
         if (-not $toolVersion) {
             $toolVersion = Get-LatestTag 'cx-michael-kubiaczyk/cx1-scan-remediate'
-            if (-not $toolVersion) { Stop-Script $scanRc 'Could not determine the latest cx1scanremediate release; the threshold failure stands' }
+            if (-not $toolVersion) { Stop-Script $scanRc 'Could not determine the latest cxscanremediate release; the threshold failure stands' }
         }
         $toolBase = "https://github.com/cx-michael-kubiaczyk/cx1-scan-remediate/releases/download/$toolVersion"
-        $tool = Join-Path $workDir 'cx1scanremediate.exe'
+        $tool = Join-Path $workDir 'cxscanremediate.exe'
         try {
             Invoke-Download @('-fsSL', "$toolBase/$toolAsset", '-o', $tool)
             Invoke-Download @('-fsSL', "$toolBase/checksums.txt", '-o', (Join-Path $workDir 'tool_checksums.txt'))
         } catch {
-            Stop-Script $scanRc 'Could not download cx1scanremediate; the threshold failure stands'
+            Stop-Script $scanRc 'Could not download cxscanremediate; the threshold failure stands'
         }
         Confirm-Checksum $tool (Join-Path $workDir 'tool_checksums.txt') $toolAsset
 
@@ -217,13 +217,13 @@ function Invoke-Main {
         # An empty argument would be dropped by Windows PowerShell 5.1, so -repo is only added when set
         if ($ghRepoUrl) { $toolArgs += @('-repo', $ghRepoUrl) }
         if ($script:Proxy) { $toolArgs += @('-proxy', $script:Proxy) }
-        $logLevel = Get-Env @('CX1SR_LOGLEVEL')
+        $logLevel = Get-Env @('CXSR_LOGLEVEL')
         if ($logLevel) { $toolArgs += @('-log', $logLevel) }
-        $timeout = Get-Env @('CX1SR_TIMEOUT')
+        $timeout = Get-Env @('CXSR_TIMEOUT')
         if ($timeout) { $toolArgs += @('-timeout', $timeout) }
         if ($script:Insecure) { $toolArgs += '-insecure' }
         if ($script:CaCert) { $toolArgs += @('-caCert', $script:CaCert) }
-        if (Test-Flag 'CX1SR_NO_KEEPALIVE') { $toolArgs += '-noKeepAlive' }
+        if (Test-Flag 'CXSR_NO_KEEPALIVE') { $toolArgs += '-noKeepAlive' }
 
         # GITHUB_TOKEN is set for the tool's process only. When an API key is used, the client
         # credentials are removed from its environment so it never has two methods to choose from.

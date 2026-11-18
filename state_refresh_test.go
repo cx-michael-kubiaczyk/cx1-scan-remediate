@@ -153,3 +153,39 @@ func TestRefreshStatesFetchErrorsAndBudget(t *testing.T) {
 		t.Errorf("fetches=%d, want 1 when the budget is nearly spent", calls)
 	}
 }
+
+func TestApplyFetchedStatesMatchesBySimilarityAndPackage(t *testing.T) {
+	logger, out := quietLogger()
+	index := []resultIndex{
+		// the platform's results carry no alternate ID, only the similarity ID (and package, for SCA)
+		{Engine: "sca", AlternateID: "rep1", SimilarityID: "CVE-1", PackageID: "Maven-a-1", State: "TO_VERIFY", AI: &aiAssessment{"NOT_EXPLOITABLE", ""}},
+		{Engine: "sca", AlternateID: "rep2", SimilarityID: "CVE-1", PackageID: "Maven-b-1", State: "TO_VERIFY", AI: &aiAssessment{"EXPLOITABLE", ""}},
+		{Engine: "sast", AlternateID: "rep3", SimilarityID: "-123", State: "TO_VERIFY"},
+		{Engine: "sca", AlternateID: "rep4", SimilarityID: "CVE-9", PackageID: "Maven-z-1", State: "TO_VERIFY", AI: &aiAssessment{"EXPLOITABLE", ""}}, // not returned at all
+	}
+	var fetched Cx1ClientGo.ScanResultSet
+	fetched.SCA = []Cx1ClientGo.ScanSCAResult{
+		{ScanResultBase: Cx1ClientGo.ScanResultBase{SimilarityID: "CVE-1", State: "PROPOSED_NOT_EXPLOITABLE"}, Data: Cx1ClientGo.ScanSCAResultData{PackageIdentifier: "Maven-a-1"}},
+		{ScanResultBase: Cx1ClientGo.ScanResultBase{SimilarityID: "CVE-1", State: "CONFIRMED"}, Data: Cx1ClientGo.ScanSCAResultData{PackageIdentifier: "Maven-b-1"}},
+	}
+	fetched.SAST = []Cx1ClientGo.ScanSASTResult{{ScanResultBase: Cx1ClientGo.ScanResultBase{SimilarityID: "-123", State: "CONFIRMED"}}}
+
+	changed, missing := applyFetchedStates(logger, index, &fetched)
+	if changed != 3 || missing != 1 {
+		t.Errorf("changed=%d missing=%d, want 3 and 1", changed, missing)
+	}
+	if index[0].State != "PROPOSED_NOT_EXPLOITABLE" || index[1].State != "CONFIRMED" || index[2].State != "CONFIRMED" || index[3].State != "TO_VERIFY" {
+		t.Errorf("states: %s %s %s %s", index[0].State, index[1].State, index[2].State, index[3].State)
+	}
+	if index[3].Refreshed || !index[0].Refreshed {
+		t.Error("only findings found in the platform's results are marked as refreshed")
+	}
+	// a finding that was not found is never reported as a mismatch (nothing is known about it)
+	if m := triageMismatches(index); len(m) != 0 {
+		t.Errorf("unexpected mismatches: %v", m)
+	}
+	// one summary warning, not one per finding
+	if n := strings.Count(out.String(), "were not found in the"); n != 1 {
+		t.Errorf("want one aggregated warning, got %d:\n%s", n, out.String())
+	}
+}

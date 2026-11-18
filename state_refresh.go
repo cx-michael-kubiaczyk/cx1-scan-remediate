@@ -9,6 +9,14 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+// useRefetchedStates is a TEMPORARY switch. When true, the states are re-read from the platform
+// after AI Triage (refreshStates) and the platform is the source of truth. It is off because the
+// results API currently does not return the AI Triage state (every finding still reads TO_VERIFY;
+// support case raised), so the state is taken from AI Triage's own response instead
+// (aiTriageState). Turn it on to test the re-read once the platform bug is fixed; the finding
+// matching in applyFetchedStates is also still unverified against a live run.
+const useRefetchedStates = false
+
 // stateRetryDelay is how long to wait before re-reading the results once, when the platform's
 // states do not match what AI Triage said (the result state may lag behind the triage job).
 const stateRetryDelay = 15 * time.Second
@@ -28,10 +36,10 @@ type resultsFetcher func() (Cx1ClientGo.ScanResultSet, error)
 
 // fetchResultsFor builds a resultsFetcher for one scan, limited to the -severity list. It has no
 // state filter, so findings whose state changed to anything are seen.
-func fetchResultsFor(cx1client *Cx1ClientGo.Cx1Client, scanID string, severities map[string]bool) resultsFetcher {
+func fetchResultsFor(cxclient *Cx1ClientGo.Cx1Client, scanID string, severities map[string]bool) resultsFetcher {
 	return func() (Cx1ClientGo.ScanResultSet, error) {
-		pagination := cx1client.GetPaginationSettings()
-		_, fetched, err := cx1client.GetAllScanResultsFiltered(Cx1ClientGo.ScanResultsFilter{
+		pagination := cxclient.GetPaginationSettings()
+		_, fetched, err := cxclient.GetAllScanResultsFiltered(Cx1ClientGo.ScanResultsFilter{
 			BaseFilter: Cx1ClientGo.BaseFilter{Limit: pagination.Results},
 			ScanID:     scanID,
 			Severity:   severityList(severities),
@@ -53,6 +61,7 @@ func refreshStates(logger *logrus.Logger, fetch resultsFetcher, index []resultIn
 	if err != nil {
 		return err
 	}
+	logFetched(logger, &fetched)
 	applyFetchedStates(logger, index, &fetched)
 
 	mismatches := triageMismatches(index)
@@ -74,11 +83,16 @@ func refreshStates(logger *logrus.Logger, fetch resultsFetcher, index []resultIn
 		logger.Warnf("Could not re-read the results (%s); using the states above", err)
 		return nil
 	}
+	logFetched(logger, &fetched)
 	applyFetchedStates(logger, index, &fetched)
 	for _, m := range triageMismatches(index) {
 		logger.Warn("Still the case after re-reading: " + m)
 	}
 	return nil
+}
+
+func logFetched(logger *logrus.Logger, fetched *Cx1ClientGo.ScanResultSet) {
+	logger.Infof("Re-read %d result(s) from the platform: %d SAST, %d SCA, %d other", fetched.Count(), len(fetched.SAST), len(fetched.SCA), int(fetched.Count())-len(fetched.SAST)-len(fetched.SCA))
 }
 
 // triageMismatches describes each finding whose current state is not one AI Triage's assessment
@@ -88,8 +102,8 @@ func triageMismatches(index []resultIndex) []string {
 	var out []string
 	for i := range index {
 		f := &index[i]
-		if f.AI == nil {
-			continue
+		if f.AI == nil || !f.Refreshed {
+			continue // no assessment to compare, or no platform state to compare it with
 		}
 		expected := expectedStates(*f.AI)
 		if expected == nil || slices.Contains(expected, f.State) {
@@ -101,36 +115,57 @@ func triageMismatches(index []resultIndex) []string {
 	return out
 }
 
-// applyFetchedStates sets each finding's State from the matching result (same engine and
-// alternate ID) in fetched. An empty or unrecognized state is kept as it was, with a warning
-// (see resolveState). It returns how many states changed and how many findings were not found.
+// applyFetchedStates sets each finding's State from the matching result in fetched. A result
+// matches on its engine and alternate ID or, failing that, on its engine, similarity ID and (for
+// SCA) package identifier, which is how the platform keys a finding's state. An empty or
+// unrecognized state is kept as it was, with a warning (see resolveState). Findings with no
+// matching result are reported once, together, and are marked as not refreshed, so that nothing
+// is concluded about them. It returns how many states changed and how many findings were not found.
 func applyFetchedStates(logger *logrus.Logger, index []resultIndex, fetched *Cx1ClientGo.ScanResultSet) (changed, missing int) {
-	type key struct{ engine, alternateID string }
-	states := map[key]string{}
+	type altKey struct{ engine, alternateID string }
+	type simKey struct{ engine, similarityID, packageID string }
+	byAlt := map[altKey]string{}
+	bySim := map[simKey]string{}
+	add := func(engine string, b Cx1ClientGo.ScanResultBase, packageID string) {
+		if b.AlternateID != "" {
+			byAlt[altKey{engine, b.AlternateID}] = b.State
+		}
+		if b.SimilarityID != "" {
+			bySim[simKey{engine, b.SimilarityID, packageID}] = b.State
+		}
+	}
 	for _, r := range fetched.SAST {
-		states[key{"sast", r.AlternateID}] = r.State
+		add("sast", r.ScanResultBase, "")
 	}
 	for _, r := range fetched.SCA {
-		states[key{"sca", r.AlternateID}] = r.State
+		add("sca", r.ScanResultBase, r.Data.PackageIdentifier)
 	}
 	for _, r := range fetched.IAC {
-		states[key{"iac", r.AlternateID}] = r.State
+		add("iac", r.ScanResultBase, "")
 	}
 
 	for i := range index {
 		f := &index[i]
-		raw, ok := states[key{f.Engine, f.AlternateID}]
+		f.Refreshed = false
+		raw, ok := byAlt[altKey{f.Engine, f.AlternateID}]
+		if !ok {
+			raw, ok = bySim[simKey{f.Engine, f.SimilarityID, f.PackageID}]
+		}
 		if !ok {
 			missing++
-			logger.Warnf("%s was not in the results re-read from the platform; its state stays %s", f, f.State)
+			logger.Debugf("%s was not in the results re-read from the platform; its state stays %s", f, f.State)
 			continue
 		}
+		f.Refreshed = true
 		state := resolveState(logger, "Platform state of "+f.String(), raw, f.State)
 		if state != f.State {
 			logger.Infof("State of %s is now %s (was %s)", f, state, f.State)
 			f.State = state
 			changed++
 		}
+	}
+	if missing > 0 {
+		logger.Warnf("%d of %d finding(s) were not found in the %d result(s) re-read from the platform, so their states are unchanged (run with -log DEBUG to list them)", missing, len(index), fetched.Count())
 	}
 	return changed, missing
 }

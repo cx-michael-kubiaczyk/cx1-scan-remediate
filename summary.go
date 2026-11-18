@@ -179,7 +179,7 @@ func describeRun(index []resultIndex, c runCounters) []string {
 	if nTriaged == 0 {
 		lines = append(lines, "AI Triage: no findings were triaged in this run")
 	} else {
-		lines = append(lines, fmt.Sprintf("AI Triage: %d finding(s) triaged; the platform now reports %s", nTriaged, strings.Join(outcome, ", ")))
+		lines = append(lines, fmt.Sprintf("AI Triage: %d finding(s) triaged; resulting states: %s", nTriaged, strings.Join(outcome, ", ")))
 	}
 	lines = append(lines, fmt.Sprintf("AI Remediation: requested for %d finding(s), %d pull request(s) opened, %d Confirmed/Urgent finding(s) skipped because their branch already exists", len(c.Requested), c.PRsOpened, len(c.BranchExists)))
 	lines = append(lines, fmt.Sprintf("Still to do in later runs (in scope for this tool): %d To_Verify finding(s) not triaged yet, %d Confirmed/Urgent finding(s) not remediated yet (of %d Confirmed/Urgent in total)", notTriaged, notRemediated, verified))

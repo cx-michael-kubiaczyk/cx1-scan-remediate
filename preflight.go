@@ -74,11 +74,11 @@ func checkRepoAccess(ctx context.Context, client *github.Client, owner, repo, ba
 
 // resolveRepoRef returns the repository to raise pull requests against: the -repo value, or
 // else the repoUrl configured on the Checkmarx One project.
-func resolveRepoRef(cx1client *Cx1ClientGo.Cx1Client, scan *Cx1ClientGo.Scan, repoFlag string) (string, error) {
+func resolveRepoRef(cxclient *Cx1ClientGo.Cx1Client, scan *Cx1ClientGo.Scan, repoFlag string) (string, error) {
 	if repoFlag != "" {
 		return repoFlag, nil
 	}
-	project, err := cx1client.GetProjectByID(scan.ProjectID)
+	project, err := cxclient.GetProjectByID(scan.ProjectID)
 	if err != nil {
 		return "", fmt.Errorf("failed to look up project %s to determine its repository: %w", scan.ProjectID, err)
 	}
@@ -91,7 +91,7 @@ func resolveRepoRef(cx1client *Cx1ClientGo.Cx1Client, scan *Cx1ClientGo.Scan, re
 // preflightPR checks everything pull request creation depends on, so that a problem is found
 // before AI credits are spent rather than after. On success it returns pr with Repo and
 // BaseBranch filled in, so publishing does not look them up again.
-func preflightPR(ctx context.Context, logger *logrus.Logger, cx1client *Cx1ClientGo.Cx1Client, scan *Cx1ClientGo.Scan, pr prOptions, sourceDir string) (prOptions, error) {
+func preflightPR(ctx context.Context, logger *logrus.Logger, cxclient *Cx1ClientGo.Cx1Client, scan *Cx1ClientGo.Scan, pr prOptions, sourceDir string) (prOptions, error) {
 	if _, err := exec.LookPath("git"); err != nil {
 		return pr, configErrorf("git was not found on PATH; it is needed to apply remediation diffs")
 	}
@@ -99,7 +99,7 @@ func preflightPR(ctx context.Context, logger *logrus.Logger, cx1client *Cx1Clien
 		return pr, configErrorf("-dir %q is not a readable directory", sourceDir)
 	}
 
-	repoRef, err := resolveRepoRef(cx1client, scan, pr.Repo)
+	repoRef, err := resolveRepoRef(cxclient, scan, pr.Repo)
 	if err != nil {
 		return pr, err
 	}

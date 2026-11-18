@@ -15,7 +15,7 @@ func TestBranchFor(t *testing.T) {
 		pr   prOptions
 		want string
 	}{
-		{"default", prOptions{}, "cx1-remediate/sast-HLg6-Y-o-"},
+		{"default", prOptions{}, "cx-remediate/sast-HLg6-Y-o-"},
 		{"prefix", prOptions{Branch: "fix"}, "fix-sast-HLg6-Y-o-"},
 		{"prefix ending in slash", prOptions{Branch: "team/fix/"}, "team/fix/sast-HLg6-Y-o-"},
 		{"prefix ending in dash", prOptions{Branch: "fix-"}, "fix-sast-HLg6-Y-o-"},
