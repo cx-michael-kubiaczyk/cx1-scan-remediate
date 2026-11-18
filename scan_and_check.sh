@@ -48,12 +48,13 @@ WORKDIR=$(mktemp -d)
 trap 'rm -rf "$WORKDIR"' EXIT
 
 # --- Helpers ---------------------------------------------------------------
-# curl for the downloads; honors CXSR_PROXY and the TLS settings above
+# curl for the downloads; honors CXSR_PROXY and the TLS settings above. HTTPS only (also across
+# redirects), TLS 1.2 or newer, transient failures retried, and bounded in time.
 download() {
     if [ -n "$insecure" ]; then set -- -k "$@"; fi
     if [ -n "$cacert" ]; then set -- --cacert "$cacert" "$@"; fi
     if [ -n "$proxy" ]; then set -- --proxy "$proxy" "$@"; fi
-    curl "$@"
+    curl --proto "=https" --proto-redir "=https" --tlsv1.2 --retry 3 --retry-connrefused --connect-timeout 30 --max-time 600 "$@"
 }
 
 # Prints the tag of the latest release of GitHub repository $1 (owner/name), taken from the

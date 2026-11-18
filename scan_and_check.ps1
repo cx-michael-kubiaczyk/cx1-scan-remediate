@@ -43,6 +43,7 @@ function Test-Flag([string]$Name) {
 # $script:Insecure come from the configuration.
 function Invoke-Download([string[]]$CurlArgs) {
     $a = @()
+    $a += @('--proto', '=https', '--proto-redir', '=https', '--tlsv1.2', '--retry', '3', '--retry-connrefused', '--connect-timeout', '30', '--max-time', '600')
     if ($script:Proxy) { $a += @('--proxy', $script:Proxy) }
     if ($script:CaCert) { $a += @('--cacert', $script:CaCert) }
     if ($script:Insecure) { $a += '-k' }
