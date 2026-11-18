@@ -38,7 +38,28 @@ func normalizeState(raw string) string {
 // still has to confirm. An EXPLOITABLE exploitability (that is not a state itself) is treated as
 // CONFIRMED, so the finding is remediated in this same run. Any other unrecognized value keeps the
 // finding's state, with a warning.
-func aiTriageState(logger *logrus.Logger, source, exploitability, reachability, fallback string) string {
+//
+// A SAST response can say TO_VERIFY while its separate exploitability and attackability fields say
+// NOT_EXPLOITABLE or NOT_ATTACKABLE (an API bug). Until that is fixed such a finding counts as
+// PROPOSED_NOT_EXPLOITABLE, with a warning; a finding that is CONFIRMED or URGENT despite those
+// fields is only warned about, not changed.
+func aiTriageState(logger *logrus.Logger, source string, a aiAssessment, fallback string) string {
+	s := aiTriageLabelState(logger, source, a.Exploitability, a.Reachability, fallback)
+	if a.saysNotExploitable() {
+		switch s {
+		case stateToVerify:
+			logger.Warnf("%s: triage status %s, but exploitability %s and attackability %s say it is not exploitable; treating it as %s (API inconsistency)",
+				source, s, a.ExploitabilityStatus, a.AttackabilityStatus, stateProposedNotExploitable)
+			return stateProposedNotExploitable
+		case stateConfirmed, stateUrgent:
+			logger.Warnf("%s: triage status %s, but exploitability %s and attackability %s say it is not exploitable; keeping %s (API inconsistency)",
+				source, s, a.ExploitabilityStatus, a.AttackabilityStatus, s)
+		}
+	}
+	return s
+}
+
+func aiTriageLabelState(logger *logrus.Logger, source, exploitability, reachability, fallback string) string {
 	if strings.EqualFold(strings.TrimSpace(exploitability), "EXPLOITABLE") && !strings.EqualFold(strings.TrimSpace(reachability), "NOT_REACHABLE") {
 		return stateConfirmed
 	}
@@ -70,6 +91,18 @@ func resolveState(logger *logrus.Logger, source string, raw, fallback string) st
 type aiAssessment struct {
 	Exploitability string
 	Reachability   string
+	// ExploitabilityStatus and AttackabilityStatus are the separate fields of a SAST triage response.
+	// Its triage status can still read TO_VERIFY while these say the finding is not exploitable (an
+	// API bug seen on Nov 18: triageStatus TO_VERIFY, exploitabilityStatus NOT_EXPLOITABLE,
+	// attackabilityStatus NOT_ATTACKABLE).
+	ExploitabilityStatus string
+	AttackabilityStatus  string
+}
+
+// saysNotExploitable reports whether the separate exploitability or attackability field says the
+// finding is not exploitable.
+func (a aiAssessment) saysNotExploitable() bool {
+	return normalizeState(a.ExploitabilityStatus) == stateNotExploitable || normalizeState(a.AttackabilityStatus) == "NOT_ATTACKABLE"
 }
 
 // expectedStates returns the states the platform is expected to report for a finding after AI
@@ -82,6 +115,8 @@ func expectedStates(a aiAssessment) []string {
 	re := normalizeState(a.Reachability)
 	switch {
 	case re == "NOT_REACHABLE", ex == stateNotExploitable, ex == stateProposedNotExploitable:
+		return []string{stateProposedNotExploitable, stateNotExploitable}
+	case ex == stateToVerify && a.saysNotExploitable():
 		return []string{stateProposedNotExploitable, stateNotExploitable}
 	case ex == "EXPLOITABLE", ex == stateConfirmed, ex == stateUrgent:
 		return []string{stateConfirmed, stateUrgent}

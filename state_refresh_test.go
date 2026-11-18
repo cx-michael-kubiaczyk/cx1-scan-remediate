@@ -52,8 +52,8 @@ func scaSet(states map[string]string) Cx1ClientGo.ScanResultSet {
 func TestRefreshStatesRetriesOnceOnMismatch(t *testing.T) {
 	logger, out := quietLogger()
 	index := []resultIndex{
-		{Engine: "sca", AlternateID: "a1", State: "TO_VERIFY", AI: &aiAssessment{"EXPLOITABLE", "REACHABLE"}},
-		{Engine: "sca", AlternateID: "a2", State: "TO_VERIFY", AI: &aiAssessment{"NOT_EXPLOITABLE", "REACHABLE"}},
+		{Engine: "sca", AlternateID: "a1", State: "TO_VERIFY", AI: &aiAssessment{Exploitability: "EXPLOITABLE", Reachability: "REACHABLE"}},
+		{Engine: "sca", AlternateID: "a2", State: "TO_VERIFY", AI: &aiAssessment{Exploitability: "NOT_EXPLOITABLE", Reachability: "REACHABLE"}},
 		{Engine: "sca", AlternateID: "a3", State: "TO_VERIFY"}, // not triaged: never a mismatch
 	}
 	calls := 0
@@ -85,7 +85,7 @@ func TestRefreshStatesRetriesOnceOnMismatch(t *testing.T) {
 
 func TestRefreshStatesNoRetryWhenStatesMatch(t *testing.T) {
 	logger, _ := quietLogger()
-	index := []resultIndex{{Engine: "sca", AlternateID: "a1", State: "TO_VERIFY", AI: &aiAssessment{"NOT_EXPLOITABLE", ""}}}
+	index := []resultIndex{{Engine: "sca", AlternateID: "a1", State: "TO_VERIFY", AI: &aiAssessment{Exploitability: "NOT_EXPLOITABLE", Reachability: ""}}}
 	calls := 0
 	fetch := func() (Cx1ClientGo.ScanResultSet, error) {
 		calls++
@@ -101,7 +101,7 @@ func TestRefreshStatesNoRetryWhenStatesMatch(t *testing.T) {
 
 func TestRefreshStatesStillMismatchedAfterRetry(t *testing.T) {
 	logger, out := quietLogger()
-	index := []resultIndex{{Engine: "sca", AlternateID: "a1", State: "TO_VERIFY", AI: &aiAssessment{"EXPLOITABLE", "REACHABLE"}}}
+	index := []resultIndex{{Engine: "sca", AlternateID: "a1", State: "TO_VERIFY", AI: &aiAssessment{Exploitability: "EXPLOITABLE", Reachability: "REACHABLE"}}}
 	calls := 0
 	fetch := func() (Cx1ClientGo.ScanResultSet, error) {
 		calls++
@@ -122,7 +122,7 @@ func TestRefreshStatesStillMismatchedAfterRetry(t *testing.T) {
 func TestRefreshStatesFetchErrorsAndBudget(t *testing.T) {
 	logger, _ := quietLogger()
 	logger.SetOutput(io.Discard)
-	index := []resultIndex{{Engine: "sca", AlternateID: "a1", State: "TO_VERIFY", AI: &aiAssessment{"EXPLOITABLE", ""}}}
+	index := []resultIndex{{Engine: "sca", AlternateID: "a1", State: "TO_VERIFY", AI: &aiAssessment{Exploitability: "EXPLOITABLE", Reachability: ""}}}
 
 	// the first fetch fails: error returned, state untouched
 	if err := refreshStates(logger, func() (Cx1ClientGo.ScanResultSet, error) { return Cx1ClientGo.ScanResultSet{}, errors.New("boom") },
@@ -158,10 +158,10 @@ func TestApplyFetchedStatesMatchesBySimilarityAndPackage(t *testing.T) {
 	logger, out := quietLogger()
 	index := []resultIndex{
 		// the platform's results carry no alternate ID, only the similarity ID (and package, for SCA)
-		{Engine: "sca", AlternateID: "rep1", SimilarityID: "CVE-1", PackageID: "Maven-a-1", State: "TO_VERIFY", AI: &aiAssessment{"NOT_EXPLOITABLE", ""}},
-		{Engine: "sca", AlternateID: "rep2", SimilarityID: "CVE-1", PackageID: "Maven-b-1", State: "TO_VERIFY", AI: &aiAssessment{"EXPLOITABLE", ""}},
+		{Engine: "sca", AlternateID: "rep1", SimilarityID: "CVE-1", PackageID: "Maven-a-1", State: "TO_VERIFY", AI: &aiAssessment{Exploitability: "NOT_EXPLOITABLE", Reachability: ""}},
+		{Engine: "sca", AlternateID: "rep2", SimilarityID: "CVE-1", PackageID: "Maven-b-1", State: "TO_VERIFY", AI: &aiAssessment{Exploitability: "EXPLOITABLE", Reachability: ""}},
 		{Engine: "sast", AlternateID: "rep3", SimilarityID: "-123", State: "TO_VERIFY"},
-		{Engine: "sca", AlternateID: "rep4", SimilarityID: "CVE-9", PackageID: "Maven-z-1", State: "TO_VERIFY", AI: &aiAssessment{"EXPLOITABLE", ""}}, // not returned at all
+		{Engine: "sca", AlternateID: "rep4", SimilarityID: "CVE-9", PackageID: "Maven-z-1", State: "TO_VERIFY", AI: &aiAssessment{Exploitability: "EXPLOITABLE", Reachability: ""}}, // not returned at all
 	}
 	var fetched Cx1ClientGo.ScanResultSet
 	fetched.SCA = []Cx1ClientGo.ScanSCAResult{

@@ -80,7 +80,7 @@ fi
 # curl for the downloads; honors CXSR_PROXY and the TLS settings above. HTTPS only (also across
 # redirects), TLS 1.2 or newer, transient failures retried, and bounded in time.
 download() {
-    if [ -n "$insecure" ]; then set -- -k "$@"; fi
+    if [ -n "$insecure" ]; then set -- -k "$@"; if [ -n "$proxy" ]; then set -- --proxy-insecure "$@"; fi; fi
     if [ -n "$cacert" ]; then set -- --cacert "$cacert" "$@"; fi
     if [ -n "$proxy" ]; then set -- --proxy "$proxy" "$@"; fi
     curl --proto "=https" --proto-redir "=https" --tlsv1.2 --retry 3 --retry-connrefused --connect-timeout 30 --max-time 600 "$@"
