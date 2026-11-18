@@ -229,7 +229,7 @@ func branchExists(ctx context.Context, client *github.Client, owner, repo, branc
 // prOptions configures how a pull request is published for each remediation.
 type prOptions struct {
 	Token      string
-	Transport  http.RoundTripper // shared with the Cx1 client, so GitHub calls honor -proxy, -insecure and -caCert
+	Transport  http.RoundTripper // shared with the Checkmarx One client, so GitHub calls honor -proxy, -insecure and -caCert
 	Repo       string
 	BaseBranch string
 	Branch     string
@@ -249,7 +249,7 @@ func branchFor(pr prOptions, f *resultIndex) string {
 	return prefix + sanitizeBranchComponent(f.Engine+"-"+f.AlternateID)
 }
 
-const defaultBranchPrefix = "cx1-remediate/"
+const defaultBranchPrefix = "cx-remediate/"
 
 // maxBranchComponent caps the finding part of a branch name. Result IDs are 28 to 44 characters, so
 // this does not shorten them; it only keeps names well inside the 255-byte limit that GitHub and

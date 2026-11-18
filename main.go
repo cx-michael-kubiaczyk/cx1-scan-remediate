@@ -112,11 +112,11 @@ func main() {
 	githubToken := flag.String("githubToken", "", "GitHub token used to publish a pull request with the remediation changes (falls back to the GITHUB_TOKEN env var); required when using -remediate")
 	repoFlag := flag.String("repo", "", "Target GitHub repository (owner/repo, HTTP(S) URL, or SSH URL; GitHub.com, GitHub Enterprise Server or a *.ghe.com host) for the pull request; derived from the Checkmarx One project's repoUrl if omitted")
 	baseBranchFlag := flag.String("baseBranch", "", "Branch to open the pull request against; defaults to the repository's default branch")
-	prBranchFlag := flag.String("prBranch", "", "Prefix for the names of the branches created for pull requests; each branch is this prefix plus the engine and result ID (default \"cx1-remediate/\"). A finding whose branch already exists is skipped")
+	prBranchFlag := flag.String("prBranch", "", "Prefix for the names of the branches created for pull requests; each branch is this prefix plus the engine and result ID (default \"cx-remediate/\"). A finding whose branch already exists is skipped")
 
-	proxy := flag.String("proxy", "", "Optional: Proxy server (http, https or socks5 URL) for outbound calls to Cx1 and GitHub; defaults to the HTTPS_PROXY environment variable")
-	insecure := flag.Bool("insecure", false, "Optional: DISABLE TLS certificate verification for calls to Cx1 and GitHub (insecure; prefer -caCert)")
-	caCert := flag.String("caCert", "", "Optional: Path to a PEM file with extra CA certificate(s) to trust for calls to Cx1 and GitHub, e.g. the CA of a TLS-inspecting proxy; added to the system trust store")
+	proxy := flag.String("proxy", "", "Optional: Proxy server (http, https or socks5 URL) for outbound calls to Checkmarx One and GitHub; defaults to the HTTPS_PROXY environment variable")
+	insecure := flag.Bool("insecure", false, "Optional: DISABLE TLS certificate verification for calls to Checkmarx One and GitHub (insecure; prefer -caCert)")
+	caCert := flag.String("caCert", "", "Optional: Path to a PEM file with extra CA certificate(s) to trust for calls to Checkmarx One and GitHub, e.g. the CA of a TLS-inspecting proxy; added to the system trust store")
 
 	noKeepAlive := flag.Bool("noKeepAlive", false, "Optional: Disable HTTP connection reuse (a new connection per request); use if a proxy drops pooled connections and calls fail with random EOF errors")
 
@@ -126,7 +126,7 @@ func main() {
 	apiKey := flag.String("apikey", "", "Checkmarx One API Key (if not using client id/secret; falls back to CX_APIKEY)")
 	clientID := flag.String("client", "", "Checkmarx One Client ID (if not using API Key; falls back to CX_CLIENT_ID)")
 	clientSecret := flag.String("secret", "", "Checkmarx One Client Secret (if not using API Key; falls back to CX_CLIENT_SECRET)")
-	cx1URL := flag.String("cx1", "", "Checkmarx One platform URL (falls back to CX_BASE_URI)")
+	cxURL := flag.String("cx", "", "Checkmarx One platform URL (falls back to CX_BASE_URI)")
 	iamURL := flag.String("iam", "", "Checkmarx One IAM URL (falls back to CX_BASE_AUTH_URI)")
 	tenant := flag.String("tenant", "", "Checkmarx One tenant (falls back to CX_TENANT)")
 	token := flag.String("token", "", "Optional: A valid access_token. If this value is provided, others will be ignored - the client will lose access when the token expires")
@@ -180,7 +180,7 @@ func main() {
 		logger.Infof("Trusting additional CA certificate(s) from %s", *caCert)
 	}
 
-	cx1client, err := Cx1ClientGo.NewClientWithOptions(Cx1ClientGo.Cx1ClientConfiguration{
+	cxclient, err := Cx1ClientGo.NewClientWithOptions(Cx1ClientGo.Cx1ClientConfiguration{
 		HttpClient:  &http.Client{Transport: transport},
 		Logger:      logger,
 		HTTPHeaders: http.Header{"User-Agent": []string{*userAgent}},
@@ -190,14 +190,14 @@ func main() {
 			ClientSecret: valueOrEnv(*clientSecret, "CX_CLIENT_SECRET"),
 			AccessToken:  *token,
 		},
-		Cx1Url: valueOrEnv(*cx1URL, "CX_BASE_URI"),
+		Cx1Url: valueOrEnv(*cxURL, "CX_BASE_URI"),
 		IAMUrl: valueOrEnv(*iamURL, "CX_BASE_AUTH_URI"),
 		Tenant: valueOrEnv(*tenant, "CX_TENANT"),
 	})
 	if err != nil {
 		logger.Fatalf("Error creating client: %s", err)
 	}
-	logger.Infof("Connected with %v", cx1client.String())
+	logger.Infof("Connected with %v", cxclient.String())
 
 	var scan Cx1ClientGo.Scan
 
@@ -206,18 +206,18 @@ func main() {
 		logger.Fatalf("Failed to read report file %s: %s", *resultsFile, err)
 	}
 
-	scanId, count, results, err := cx1client.ParseReportJSON(data)
+	scanId, count, results, err := cxclient.ParseReportJSON(data)
 	if err != nil {
 		logger.Fatalf("Failed to parse report file %s: %s", *resultsFile, err)
 	}
 
-	scan, err = cx1client.GetScanByID(scanId)
+	scan, err = cxclient.GetScanByID(scanId)
 	if err != nil {
 		logger.Fatalf("Failed to retrieve scan information for scan ID %s: %s", scanId, err)
 	}
 	logger.Infof("Target scan is %s", scan.String())
 
-	deepLink := cx1client.GetBaseURL() + "/riskhub/" + scan.ProjectID
+	deepLink := cxclient.GetBaseURL() + "/riskhub/" + scan.ProjectID
 
 	// Pull requests are the only way remediations are delivered, so make sure they can be
 	// created before any AI Triage or Remediation credits are spent.
@@ -230,7 +230,7 @@ func main() {
 		DeepLink:   deepLink,
 	}
 	if *numRemediate > 0 {
-		pr, err = preflightPR(context.Background(), logger, cx1client, &scan, pr, *sourceDir)
+		pr, err = preflightPR(context.Background(), logger, cxclient, &scan, pr, *sourceDir)
 		if err != nil {
 			code := exitError
 			if errors.Is(err, errConfig) {
@@ -352,7 +352,7 @@ func main() {
 
 	summaryIndex = index // the states in it are updated as the run goes on; finish summarizes them
 
-	clientVars := cx1client.GetClientVars()
+	clientVars := cxclient.GetClientVars()
 	aiBudget := newBudget(*timeout)
 	if !aiBudget.unlimited() {
 		logger.Infof("AI Triage and Remediation share an overall time limit of %s", *timeout)
@@ -368,13 +368,13 @@ func main() {
 				recordError(logger, "Overall -timeout of %s reached; not submitting further AI Triage batches", *timeout)
 				break
 			}
-			triageBatchOf(cx1client, logger, &scan, batch, aiBudget, clientVars)
+			triageBatchOf(cxclient, logger, &scan, batch, aiBudget, clientVars)
 		}
 
 		if useRefetchedStates && len(candidates) > 0 {
 			// Whether a finding is exploitable is decided by the platform, so re-read the results
 			// now that AI Triage has finished instead of interpreting its labels here.
-			if err := refreshStates(logger, fetchResultsFor(cx1client, scan.ScanID, severities), index, aiBudget, stateRetryDelay, time.Sleep); err != nil {
+			if err := refreshStates(logger, fetchResultsFor(cxclient, scan.ScanID, severities), index, aiBudget, stateRetryDelay, time.Sleep); err != nil {
 				recordError(logger, "Could not re-read the scan results after AI Triage (%s); findings keep the state from the scan report, so none become eligible for AI Remediation because of the triage", err)
 			}
 		}
@@ -421,7 +421,7 @@ func main() {
 				recordError(logger, "Overall -timeout of %s reached; not submitting further AI Remediation batches", *timeout)
 				break
 			}
-			remediateBatchOf(cx1client, logger, &scan, batch, *sourceDir, pr, aiBudget, clientVars)
+			remediateBatchOf(cxclient, logger, &scan, batch, *sourceDir, pr, aiBudget, clientVars)
 		}
 	}
 
@@ -495,12 +495,12 @@ func toBuckets(findings []*resultIndex) []Cx1ClientGo.AIRequestBucket {
 
 // triageBatchOf submits the findings to AI Triage in a single request, then waits for each
 // in turn. The jobs run concurrently on the platform, so only the first wait is long.
-func triageBatchOf(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger, scan *Cx1ClientGo.Scan, batch []*resultIndex, aiBudget budget, vars Cx1ClientGo.ClientVars) {
+func triageBatchOf(cxclient *Cx1ClientGo.Cx1Client, logger *logrus.Logger, scan *Cx1ClientGo.Scan, batch []*resultIndex, aiBudget budget, vars Cx1ClientGo.ClientVars) {
 	for _, finding := range batch {
 		logger.Infof("AI Auto-Triage %s finding: %s", finding.Severity, finding)
 	}
 
-	triageId, err := cx1client.RequestAITriages(scan.ScanID, toBuckets(batch))
+	triageId, err := cxclient.RequestAITriages(scan.ScanID, toBuckets(batch))
 	if err != nil {
 		recordError(logger, "Failed to request triage: %s", err)
 		return
@@ -512,9 +512,9 @@ func triageBatchOf(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger, scan
 		var err error
 		delay, max := aiBudget.pollTimeouts(vars.AIPollingDelaySeconds, vars.AIPollingMaxSeconds)
 		if finding.Engine == "sca" {
-			status, err = cx1client.PollSCAAITriageStatusWithTimeout(scan.ProjectID, finding.SimilarityID, finding.PackageID, delay, max)
+			status, err = cxclient.PollSCAAITriageStatusWithTimeout(scan.ProjectID, finding.SimilarityID, finding.PackageID, delay, max)
 		} else {
-			status, err = cx1client.PollSASTAITriageStatusWithTimeout(scan.ProjectID, finding.SimilarityID, delay, max)
+			status, err = cxclient.PollSASTAITriageStatusWithTimeout(scan.ProjectID, finding.SimilarityID, delay, max)
 		}
 		if err != nil && aiBudget.expired() {
 			recordError(logger, "Overall -timeout reached before AI Triage finished for %s (%s); its state is unchanged", finding, err)
@@ -530,7 +530,7 @@ func triageBatchOf(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger, scan
 		// The AI's assessment is only logged for information: the finding's state is read back
 		// from the platform once the whole triage is done (see refreshStates).
 		if finding.Engine == "sca" {
-			details, err := cx1client.GetSCAAITriage(scan.ScanID, scan.ProjectID, finding.SimilarityID, finding.PackageID)
+			details, err := cxclient.GetSCAAITriage(scan.ScanID, scan.ProjectID, finding.SimilarityID, finding.PackageID)
 			if err != nil {
 				logger.Warnf("Could not get the AI Triage assessment for %s: %s", finding, err)
 				continue
@@ -543,7 +543,7 @@ func triageBatchOf(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger, scan
 			continue
 		}
 
-		details, err := cx1client.GetSASTAITriage(scan.ProjectID, finding.SimilarityID)
+		details, err := cxclient.GetSASTAITriage(scan.ProjectID, finding.SimilarityID)
 		if err != nil {
 			logger.Warnf("Could not get the AI Triage assessment for %s: %s", finding, err)
 			continue
@@ -563,12 +563,12 @@ func triageBatchOf(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger, scan
 // Every remediation is computed in memory against the untouched source tree and published as
 // its own independent pull request, so remediations that touch the same file do not interfere
 // with one another. The source tree is never modified.
-func remediateBatchOf(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger, scan *Cx1ClientGo.Scan, batch []*resultIndex, sourceDir string, pr prOptions, aiBudget budget, vars Cx1ClientGo.ClientVars) {
+func remediateBatchOf(cxclient *Cx1ClientGo.Cx1Client, logger *logrus.Logger, scan *Cx1ClientGo.Scan, batch []*resultIndex, sourceDir string, pr prOptions, aiBudget budget, vars Cx1ClientGo.ClientVars) {
 	for _, finding := range batch {
 		logger.Infof("AI Auto-Remediate finding: %s", finding)
 	}
 
-	remediationId, err := cx1client.RequestAIRemediations(scan.ScanID, scan.ProjectID, toBuckets(batch))
+	remediationId, err := cxclient.RequestAIRemediations(scan.ScanID, scan.ProjectID, toBuckets(batch))
 	if err != nil {
 		recordError(logger, "Failed to request remediation: %s", err)
 		return
@@ -577,7 +577,7 @@ func remediateBatchOf(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger, s
 
 	for _, finding := range batch {
 		delay, max := aiBudget.pollTimeouts(vars.AIPollingDelaySeconds, vars.AIPollingMaxSeconds)
-		status, err := cx1client.PollAIRemediationStatusWithTimeout(scan.ScanID, finding.Engine, finding.AlternateID, delay, max)
+		status, err := cxclient.PollAIRemediationStatusWithTimeout(scan.ScanID, finding.Engine, finding.AlternateID, delay, max)
 		if err != nil && aiBudget.expired() {
 			// jobs that finished earlier still get their pull request; only this unfinished one is abandoned
 			recordError(logger, "Overall -timeout reached before AI Remediation finished for %s (%s); abandoning it", finding, err)
@@ -590,7 +590,7 @@ func remediateBatchOf(cx1client *Cx1ClientGo.Cx1Client, logger *logrus.Logger, s
 			logger.Tracef("Remediation for %s finished with status: %s", finding, status)
 		}
 
-		details, err := cx1client.GetAIRemediationDetails(scan.ScanID, finding.AlternateID)
+		details, err := cxclient.GetAIRemediationDetails(scan.ScanID, finding.AlternateID)
 		if err != nil {
 			recordError(logger, "Failed while retrieving remediation for %s %s finding %s: %s", finding.Severity, finding.Engine, finding, err)
 			continue
@@ -689,7 +689,7 @@ func sevcmp(sev1, sev2 string) int {
 // they have started.
 const responseHeaderTimeout = 120 * time.Second
 
-// newTransport builds the HTTP transport for calls to Cx1. TLS verification stays on unless
+// newTransport builds the HTTP transport for calls to Checkmarx One. TLS verification stays on unless
 // insecure is set; caCertFile adds extra trusted CAs (e.g. a TLS-inspecting proxy's) to the
 // system pool.
 func newTransport(proxy string, insecure bool, caCertFile string) (*http.Transport, error) {

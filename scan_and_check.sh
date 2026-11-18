@@ -25,22 +25,22 @@ if [ -z "$CX_APIKEY" ]; then
 fi
 
 GH_REPO_URL="${GH_REPO_URL:-}"
-proxy="${CX1SR_PROXY:-}"
-cacert="${CX1SR_CACERT:-}"
+proxy="${CXSR_PROXY:-}"
+cacert="${CXSR_CACERT:-}"
 
 # Optional TLS settings (e.g. behind a TLS-inspecting proxy):
-#   CX1SR_CACERT:   path to a PEM file with the proxy's CA certificate(s); verification stays on
-#   CX1SR_INSECURE: "true" to disable TLS verification entirely (not recommended)
-case "${CX1SR_INSECURE:-}" in
+#   CXSR_CACERT:   path to a PEM file with the proxy's CA certificate(s); verification stays on
+#   CXSR_INSECURE: "true" to disable TLS verification entirely (not recommended)
+case "${CXSR_INSECURE:-}" in
     true|TRUE|True|1) insecure=1 ;;
     *) insecure="" ;;
 esac
 if [ -n "$insecure" ] && [ -n "$cacert" ]; then
-    echo "CX1SR_INSECURE and CX1SR_CACERT are mutually exclusive" >&2
+    echo "CXSR_INSECURE and CXSR_CACERT are mutually exclusive" >&2
     exit 2
 fi
 if [ -n "$cacert" ] && [ ! -f "$cacert" ]; then
-    echo "CX1SR_CACERT file not found: $cacert" >&2
+    echo "CXSR_CACERT file not found: $cacert" >&2
     exit 2
 fi
 
@@ -48,7 +48,7 @@ WORKDIR=$(mktemp -d)
 trap 'rm -rf "$WORKDIR"' EXIT
 
 # --- Helpers ---------------------------------------------------------------
-# curl for the downloads; honors CX1SR_PROXY and the TLS settings above
+# curl for the downloads; honors CXSR_PROXY and the TLS settings above
 download() {
     if [ -n "$insecure" ]; then set -- -k "$@"; fi
     if [ -n "$cacert" ]; then set -- --cacert "$cacert" "$@"; fi
@@ -146,29 +146,29 @@ fi
 
 # --- Triage and remediate --------------------------------------------------
 echo "Threshold exceeded"
-# The latest release of this tool unless CX1SR_VERSION pins one (e.g. v0.0.11)
-CX1SR_VERSION="${CX1SR_VERSION:-}"
-if [ -z "$CX1SR_VERSION" ]; then
-    CX1SR_VERSION=$(latest_tag cx-michael-kubiaczyk/cx1-scan-remediate) || { echo "The threshold failure stands" >&2; exit "$scan_rc"; }
+# The latest release of this tool unless CXSR_VERSION pins one (e.g. v0.0.11)
+CXSR_VERSION="${CXSR_VERSION:-}"
+if [ -z "$CXSR_VERSION" ]; then
+    CXSR_VERSION=$(latest_tag cx-michael-kubiaczyk/cx1-scan-remediate) || { echo "The threshold failure stands" >&2; exit "$scan_rc"; }
 fi
-tool_base="https://github.com/cx-michael-kubiaczyk/cx1-scan-remediate/releases/download/$CX1SR_VERSION"
-tool_asset="cx1scanremediate_${tool_platform}"
-if ! download -fsSL "$tool_base/$tool_asset" -o "$WORKDIR/cx1scanremediate" ||
+tool_base="https://github.com/cx-michael-kubiaczyk/cx1-scan-remediate/releases/download/$CXSR_VERSION"
+tool_asset="cxscanremediate_${tool_platform}"
+if ! download -fsSL "$tool_base/$tool_asset" -o "$WORKDIR/cxscanremediate" ||
    ! download -fsSL "$tool_base/checksums.txt" -o "$WORKDIR/tool_checksums.txt"; then
-    echo "Could not download cx1scanremediate; the threshold failure stands" >&2
+    echo "Could not download cxscanremediate; the threshold failure stands" >&2
     exit "$scan_rc"
 fi
-verify_checksum "$WORKDIR/cx1scanremediate" "$WORKDIR/tool_checksums.txt" "$tool_asset"
-chmod +x "$WORKDIR/cx1scanremediate"
+verify_checksum "$WORKDIR/cxscanremediate" "$WORKDIR/tool_checksums.txt" "$tool_asset"
+chmod +x "$WORKDIR/cxscanremediate"
 
 # Optional arguments are built as positional parameters so values with spaces survive.
 set --
 if [ -n "$proxy" ]; then set -- "$@" -proxy "$proxy"; fi
-if [ -n "${CX1SR_LOGLEVEL:-}" ]; then set -- "$@" -log "$CX1SR_LOGLEVEL"; fi
-if [ -n "${CX1SR_TIMEOUT:-}" ]; then set -- "$@" -timeout "$CX1SR_TIMEOUT"; fi
+if [ -n "${CXSR_LOGLEVEL:-}" ]; then set -- "$@" -log "$CXSR_LOGLEVEL"; fi
+if [ -n "${CXSR_TIMEOUT:-}" ]; then set -- "$@" -timeout "$CXSR_TIMEOUT"; fi
 if [ -n "$insecure" ]; then set -- "$@" -insecure; fi
 if [ -n "$cacert" ]; then set -- "$@" -caCert "$cacert"; fi
-case "${CX1SR_NO_KEEPALIVE:-}" in true|TRUE|True|1) set -- "$@" -noKeepAlive ;; esac
+case "${CXSR_NO_KEEPALIVE:-}" in true|TRUE|True|1) set -- "$@" -noKeepAlive ;; esac
 
 # Credentials are not passed as flags (they would show up in the process list and in "set -x"
 # logs). The tool reads CX_BASE_URI, CX_BASE_AUTH_URI, CX_TENANT, CX_CLIENT_ID,
@@ -178,9 +178,9 @@ case "${CX1SR_NO_KEEPALIVE:-}" in true|TRUE|True|1) set -- "$@" -noKeepAlive ;; 
 # it never has two methods to choose from.
 tool_rc=0
 if [ -n "$CX_APIKEY" ]; then
-    GITHUB_TOKEN="$GH_PR_PAT" env -u CX_CLIENT_ID -u CX_CLIENT_SECRET "$WORKDIR/cx1scanremediate" -triage 5 -remediate 1 -input "$report" -baseBranch "$BRANCH" -repo "$GH_REPO_URL" -engine "sast,sca" -severity "CRITICAL,HIGH" "$@" || tool_rc=$?
+    GITHUB_TOKEN="$GH_PR_PAT" env -u CX_CLIENT_ID -u CX_CLIENT_SECRET "$WORKDIR/cxscanremediate" -triage 5 -remediate 1 -input "$report" -baseBranch "$BRANCH" -repo "$GH_REPO_URL" -engine "sast,sca" -severity "CRITICAL,HIGH" "$@" || tool_rc=$?
 else
-    GITHUB_TOKEN="$GH_PR_PAT" "$WORKDIR/cx1scanremediate" -triage 5 -remediate 1 -input "$report" -baseBranch "$BRANCH" -repo "$GH_REPO_URL" -engine "sast,sca" -severity "CRITICAL,HIGH" "$@" || tool_rc=$?
+    GITHUB_TOKEN="$GH_PR_PAT" "$WORKDIR/cxscanremediate" -triage 5 -remediate 1 -input "$report" -baseBranch "$BRANCH" -repo "$GH_REPO_URL" -engine "sast,sca" -severity "CRITICAL,HIGH" "$@" || tool_rc=$?
 fi
 
 # the gate was broken, so never pass: preserve the tool's failure, or fall back to the CLI's exit code

@@ -1,5 +1,5 @@
 *.json
-cx1scanremediate*
+cxscanremediate*
 *.txt
 test
 orig

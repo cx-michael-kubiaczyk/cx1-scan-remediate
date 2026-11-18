@@ -41,13 +41,13 @@ type patchedFile struct {
 // The remediation is all-or-nothing: if any diff cannot be applied an error is returned and
 // nothing is produced, since a half-applied fix is worse than none.
 func applyRemediationInMemory(logger *logrus.Logger, details Cx1ClientGo.AIRemediationDetails, baseDir string) ([]patchedFile, error) {
-	root, err := os.MkdirTemp("", "cx1-remediate-*")
+	root, err := os.MkdirTemp("", "cx-remediate-*")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create scratch directory: %w", err)
 	}
 	defer func() {
-		if os.Getenv("CX1SR_DEBUG") != "" {
-			logger.Infof("Scratch directory kept (CX1SR_DEBUG is set): %s", root)
+		if os.Getenv("CXSR_DEBUG") != "" {
+			logger.Infof("Scratch directory kept (CXSR_DEBUG is set): %s", root)
 		} else {
 			os.RemoveAll(root)
 		}

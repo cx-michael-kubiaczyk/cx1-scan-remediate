@@ -36,10 +36,10 @@ type resultsFetcher func() (Cx1ClientGo.ScanResultSet, error)
 
 // fetchResultsFor builds a resultsFetcher for one scan, limited to the -severity list. It has no
 // state filter, so findings whose state changed to anything are seen.
-func fetchResultsFor(cx1client *Cx1ClientGo.Cx1Client, scanID string, severities map[string]bool) resultsFetcher {
+func fetchResultsFor(cxclient *Cx1ClientGo.Cx1Client, scanID string, severities map[string]bool) resultsFetcher {
 	return func() (Cx1ClientGo.ScanResultSet, error) {
-		pagination := cx1client.GetPaginationSettings()
-		_, fetched, err := cx1client.GetAllScanResultsFiltered(Cx1ClientGo.ScanResultsFilter{
+		pagination := cxclient.GetPaginationSettings()
+		_, fetched, err := cxclient.GetAllScanResultsFiltered(Cx1ClientGo.ScanResultsFilter{
 			BaseFilter: Cx1ClientGo.BaseFilter{Limit: pagination.Results},
 			ScanID:     scanID,
 			Severity:   severityList(severities),
