@@ -2,58 +2,88 @@
 set -eu
 
 # --- Configuration ---------------------------------------------------------
-# Credentials and endpoints use the CX_* variables the AST CLI reads natively, so they never
-# appear on its command line (where other processes and "set -x" logs could see them). The
-# older names (CX1_URL, IAM_URL, CX1_TENANT, CX1_CLIENT, CX1_SECRET) are still accepted.
-CX_BASE_URI="${CX_BASE_URI:-${CX1_URL:-}}"
-CX_BASE_AUTH_URI="${CX_BASE_AUTH_URI:-${IAM_URL:-}}"
-CX_TENANT="${CX_TENANT:-${CX1_TENANT:-}}"
-CX_CLIENT_ID="${CX_CLIENT_ID:-${CX1_CLIENT:-}}"
-CX_CLIENT_SECRET="${CX_CLIENT_SECRET:-${CX1_SECRET:-}}"
-CX_APIKEY="${CX_APIKEY:-${CX1_APIKEY:-}}"
+# Required:
+#   PROJECT_NAME, BRANCH   the Checkmarx One project and the branch being scanned
+#   CX_BASE_URI            Checkmarx One URL, e.g. https://deu.ast.checkmarx.net
+#   CX_APIKEY              or CX_BASE_AUTH_URI + CX_TENANT + CX_CLIENT_ID + CX_CLIENT_SECRET
+#   GITHUB_PR_TOKEN        a token that can write to the target repository and raise pull requests
+#                          (deliberately not GITHUB_TOKEN, so an ambient CI token is never used)
+# Optional (defaults in brackets): CXSR_REPO (the project's repoUrl), CXSR_BASE_BRANCH [BRANCH],
+#   CXSR_TRIAGE_COUNT [5], CXSR_REMEDIATE_COUNT [1], CXSR_ENGINES [sast,sca],
+#   CXSR_SEVERITIES [CRITICAL,HIGH], CXSR_THRESHOLD [every engine, critical and high, at 1],
+#   CXSR_LOG_LEVEL, CXSR_TIMEOUT, CXSR_PROXY, CXSR_CA_CERT, CXSR_INSECURE, CXSR_NO_KEEP_ALIVE,
+#   CXSR_KEEP_TEMP, CXSR_VERSION [latest release], CXSR_RELEASE_REPO, CX_CLI_VERSION [latest],
+#   CXSR_WORKDIR [a new temporary directory, removed on exit].
+# Everything is passed to the AST CLI and to the cxscanremediate tool through the environment (see
+# the README for each variable), so no credential ever appears on a command line, where other
+# processes and "set -x" logs could see it.
+: "${CX_BASE_URI:=}"
+: "${CX_BASE_AUTH_URI:=}"
+: "${CX_TENANT:=}"
+: "${CX_CLIENT_ID:=}"
+: "${CX_CLIENT_SECRET:=}"
+: "${CX_APIKEY:=}"
 export CX_BASE_URI CX_BASE_AUTH_URI CX_TENANT CX_CLIENT_ID CX_CLIENT_SECRET CX_APIKEY
 
 : "${PROJECT_NAME:?PROJECT_NAME is required}"
 : "${BRANCH:?BRANCH is required}"
-: "${CX_BASE_URI:?CX_BASE_URI (or CX1_URL) is required}"
-: "${GH_PR_PAT:?GH_PR_PAT is required (a token that can write to the target repository and raise pull requests)}"
+: "${CX_BASE_URI:?CX_BASE_URI is required}"
+: "${GITHUB_PR_TOKEN:?GITHUB_PR_TOKEN is required (a token that can write to the target repository and raise pull requests)}"
 if [ -z "$CX_APIKEY" ]; then
-    : "${CX_BASE_AUTH_URI:?CX_BASE_AUTH_URI (or IAM_URL) is required unless CX_APIKEY is set}"
-    : "${CX_TENANT:?CX_TENANT (or CX1_TENANT) is required unless CX_APIKEY is set}"
-    : "${CX_CLIENT_ID:?CX_CLIENT_ID (or CX1_CLIENT) is required unless CX_APIKEY is set}"
-    : "${CX_CLIENT_SECRET:?CX_CLIENT_SECRET (or CX1_SECRET) is required unless CX_APIKEY is set}"
+    : "${CX_BASE_AUTH_URI:?CX_BASE_AUTH_URI is required unless CX_APIKEY is set}"
+    : "${CX_TENANT:?CX_TENANT is required unless CX_APIKEY is set}"
+    : "${CX_CLIENT_ID:?CX_CLIENT_ID is required unless CX_APIKEY is set}"
+    : "${CX_CLIENT_SECRET:?CX_CLIENT_SECRET is required unless CX_APIKEY is set}"
 fi
 
-GH_REPO_URL="${GH_REPO_URL:-}"
+# Defaults for the tool; it reads these CXSR_* variables itself.
+: "${CXSR_TRIAGE_COUNT:=5}"
+: "${CXSR_REMEDIATE_COUNT:=1}"
+: "${CXSR_ENGINES:=sast,sca}"
+: "${CXSR_SEVERITIES:=CRITICAL,HIGH}"
+: "${CXSR_BASE_BRANCH:=$BRANCH}"
+export CXSR_TRIAGE_COUNT CXSR_REMEDIATE_COUNT CXSR_ENGINES CXSR_SEVERITIES CXSR_BASE_BRANCH
+
+threshold="${CXSR_THRESHOLD:-sast-critical=1;sast-high=1;sca-critical=1;sca-high=1;iac-security-critical=1;iac-security-high=1;api-security-critical=1;api-security-high=1;containers-critical=1;containers-high=1;sscs-secret-detection-critical=1;sscs-secret-detection-high=1;sscs-scorecard-critical=1;sscs-scorecard-high=1}"
+release_repo="${CXSR_RELEASE_REPO:-cx-michael-kubiaczyk/cx1-scan-remediate}"
+
 proxy="${CXSR_PROXY:-}"
-cacert="${CXSR_CACERT:-}"
+cacert="${CXSR_CA_CERT:-}"
 
 # Optional TLS settings (e.g. behind a TLS-inspecting proxy):
-#   CXSR_CACERT:   path to a PEM file with the proxy's CA certificate(s); verification stays on
+#   CXSR_CA_CERT:  path to a PEM file with the proxy's CA certificate(s); verification stays on
 #   CXSR_INSECURE: "true" to disable TLS verification entirely (not recommended)
 case "${CXSR_INSECURE:-}" in
     true|TRUE|True|1) insecure=1 ;;
     *) insecure="" ;;
 esac
 if [ -n "$insecure" ] && [ -n "$cacert" ]; then
-    echo "CXSR_INSECURE and CXSR_CACERT are mutually exclusive" >&2
+    echo "CXSR_INSECURE and CXSR_CA_CERT are mutually exclusive" >&2
     exit 2
 fi
 if [ -n "$cacert" ] && [ ! -f "$cacert" ]; then
-    echo "CXSR_CACERT file not found: $cacert" >&2
+    echo "CXSR_CA_CERT file not found: $cacert" >&2
     exit 2
 fi
 
-WORKDIR=$(mktemp -d)
-trap 'rm -rf "$WORKDIR"' EXIT
+# A directory given in CXSR_WORKDIR is kept (it is the caller's); a temporary one is removed on exit.
+if [ -n "${CXSR_WORKDIR:-}" ]; then
+    WORKDIR="$CXSR_WORKDIR"
+    mkdir -p "$WORKDIR"
+    rm -f "$WORKDIR/cx_result.json"   # never mistake an earlier scan's report for this one's
+else
+    WORKDIR=$(mktemp -d)
+    trap 'rm -rf "$WORKDIR"' EXIT
+fi
 
 # --- Helpers ---------------------------------------------------------------
-# curl for the downloads; honors CXSR_PROXY and the TLS settings above
+# curl for the downloads; honors CXSR_PROXY and the TLS settings above. HTTPS only (also across
+# redirects), TLS 1.2 or newer, transient failures retried, and bounded in time.
 download() {
     if [ -n "$insecure" ]; then set -- -k "$@"; fi
     if [ -n "$cacert" ]; then set -- --cacert "$cacert" "$@"; fi
     if [ -n "$proxy" ]; then set -- --proxy "$proxy" "$@"; fi
-    curl "$@"
+    curl --proto "=https" --proto-redir "=https" --tlsv1.2 --retry 3 --retry-connrefused --connect-timeout 30 --max-time 600 "$@"
 }
 
 # Prints the tag of the latest release of GitHub repository $1 (owner/name), taken from the
@@ -132,7 +162,7 @@ chmod +x "$WORKDIR/cx"
 report="$WORKDIR/cx_result.json"
 
 scan_rc=0
-run_cx scan create --project-name "$PROJECT_NAME" -s . --branch "$BRANCH" --threshold "sast-critical=1;sast-high=1;sca-critical=1;sca-high=1;iac-security-critical=1;iac-security-high=1;api-security-critical=1;api-security-high=1;containers-critical=1;containers-high=1;sscs-secret-detection-critical=1;sscs-secret-detection-high=1;sscs-scorecard-critical=1;sscs-scorecard-high=1" --report-format json --output-path "$WORKDIR" || scan_rc=$?
+run_cx scan create --project-name "$PROJECT_NAME" -s . --branch "$BRANCH" --threshold "$threshold" --report-format json --output-path "$WORKDIR" || scan_rc=$?
 
 if [ "$scan_rc" -eq 0 ]; then
     exit 0
@@ -149,9 +179,9 @@ echo "Threshold exceeded"
 # The latest release of this tool unless CXSR_VERSION pins one (e.g. v0.0.11)
 CXSR_VERSION="${CXSR_VERSION:-}"
 if [ -z "$CXSR_VERSION" ]; then
-    CXSR_VERSION=$(latest_tag cx-michael-kubiaczyk/cx1-scan-remediate) || { echo "The threshold failure stands" >&2; exit "$scan_rc"; }
+    CXSR_VERSION=$(latest_tag "$release_repo") || { echo "The threshold failure stands" >&2; exit "$scan_rc"; }
 fi
-tool_base="https://github.com/cx-michael-kubiaczyk/cx1-scan-remediate/releases/download/$CXSR_VERSION"
+tool_base="https://github.com/$release_repo/releases/download/$CXSR_VERSION"
 tool_asset="cxscanremediate_${tool_platform}"
 if ! download -fsSL "$tool_base/$tool_asset" -o "$WORKDIR/cxscanremediate" ||
    ! download -fsSL "$tool_base/checksums.txt" -o "$WORKDIR/tool_checksums.txt"; then
@@ -161,26 +191,16 @@ fi
 verify_checksum "$WORKDIR/cxscanremediate" "$WORKDIR/tool_checksums.txt" "$tool_asset"
 chmod +x "$WORKDIR/cxscanremediate"
 
-# Optional arguments are built as positional parameters so values with spaces survive.
-set --
-if [ -n "$proxy" ]; then set -- "$@" -proxy "$proxy"; fi
-if [ -n "${CXSR_LOGLEVEL:-}" ]; then set -- "$@" -log "$CXSR_LOGLEVEL"; fi
-if [ -n "${CXSR_TIMEOUT:-}" ]; then set -- "$@" -timeout "$CXSR_TIMEOUT"; fi
-if [ -n "$insecure" ]; then set -- "$@" -insecure; fi
-if [ -n "$cacert" ]; then set -- "$@" -caCert "$cacert"; fi
-case "${CXSR_NO_KEEPALIVE:-}" in true|TRUE|True|1) set -- "$@" -noKeepAlive ;; esac
-
-# Credentials are not passed as flags (they would show up in the process list and in "set -x"
-# logs). The tool reads CX_BASE_URI, CX_BASE_AUTH_URI, CX_TENANT, CX_CLIENT_ID,
-# CX_CLIENT_SECRET and CX_APIKEY from the environment (already exported above), and the
-# GitHub token from GITHUB_TOKEN, which is set for the tool's process only.
-# When an API key is used, the client credentials are removed from the tool's environment so
-# it never has two methods to choose from.
+# The tool reads its whole configuration from the environment (the CXSR_* variables above and
+# CX_*, exported earlier), apart from the report location and the GitHub token below. Extra
+# arguments given to this script are passed on to it. The token is set for the tool's process
+# only. When an API key is used, the client credentials are removed from the tool's environment
+# so it never has two methods to choose from.
 tool_rc=0
 if [ -n "$CX_APIKEY" ]; then
-    GITHUB_TOKEN="$GH_PR_PAT" env -u CX_CLIENT_ID -u CX_CLIENT_SECRET "$WORKDIR/cxscanremediate" -triage 5 -remediate 1 -input "$report" -baseBranch "$BRANCH" -repo "$GH_REPO_URL" -engine "sast,sca" -severity "CRITICAL,HIGH" "$@" || tool_rc=$?
+    CXSR_REPORT_FILE="$report" GITHUB_TOKEN="$GITHUB_PR_TOKEN" env -u CX_CLIENT_ID -u CX_CLIENT_SECRET "$WORKDIR/cxscanremediate" "$@" || tool_rc=$?
 else
-    GITHUB_TOKEN="$GH_PR_PAT" "$WORKDIR/cxscanremediate" -triage 5 -remediate 1 -input "$report" -baseBranch "$BRANCH" -repo "$GH_REPO_URL" -engine "sast,sca" -severity "CRITICAL,HIGH" "$@" || tool_rc=$?
+    CXSR_REPORT_FILE="$report" GITHUB_TOKEN="$GITHUB_PR_TOKEN" "$WORKDIR/cxscanremediate" "$@" || tool_rc=$?
 fi
 
 # the gate was broken, so never pass: preserve the tool's failure, or fall back to the CLI's exit code

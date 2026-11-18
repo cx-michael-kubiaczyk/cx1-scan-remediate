@@ -34,7 +34,7 @@ func TestNewTransportTLS(t *testing.T) {
 		t.Error("expected verification failure with no CA configured")
 	}
 
-	// -insecure skips verification
+	// --insecure skips verification
 	tr, err = newTransport("", true, "")
 	if err != nil {
 		t.Fatal(err)
@@ -43,7 +43,7 @@ func TestNewTransportTLS(t *testing.T) {
 		t.Errorf("insecure: %v", err)
 	}
 
-	// -caCert trusts the server's CA, with verification still on
+	// --ca-cert trusts the server's CA, with verification still on
 	dir := t.TempDir()
 	caFile := filepath.Join(dir, "ca.pem")
 	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
@@ -70,7 +70,7 @@ func TestNewTransportErrors(t *testing.T) {
 		t.Error("expected error for missing file")
 	}
 	if _, err := newTransport("", true, bad); err == nil {
-		t.Error("expected error for -insecure with -caCert")
+		t.Error("expected error for --insecure with --ca-cert")
 	}
 	if _, err := newTransport("proxy.corp:8080", false, ""); err == nil {
 		t.Error("expected error for proxy without a scheme")
@@ -128,7 +128,7 @@ func (s *stubTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{}`)), Header: http.Header{}, Request: r}, nil
 }
 
-// the GitHub client must use the shared transport, so -proxy / -insecure / -caCert apply to it too
+// the GitHub client must use the shared transport, so --proxy / --insecure / --ca-cert apply to it too
 func TestNewGithubClientUsesTransport(t *testing.T) {
 	stub := &stubTransport{}
 	client, err := newGithubClient("token", "", stub)

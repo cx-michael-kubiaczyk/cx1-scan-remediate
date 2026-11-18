@@ -2,8 +2,12 @@ package main
 
 import (
 	"bytes"
+	"flag"
+	"strings"
+	"time"
 	"testing"
 
+	"github.com/cxpsemea/Cx1ClientGo"
 	"github.com/sirupsen/logrus"
 )
 
@@ -63,5 +67,75 @@ func TestCheckCount(t *testing.T) {
 	}
 	if buf.Len() == 0 {
 		t.Error("expected a warning when capping")
+	}
+}
+
+func TestApplyEnvDefaults(t *testing.T) {
+	newSet := func(args ...string) (*flag.FlagSet, *int, *bool, *string) {
+		fs := flag.NewFlagSet("t", flag.ContinueOnError)
+		n := fs.Int("triage-count", 0, "")
+		b := fs.Bool("insecure", false, "")
+		s := fs.String("repo", "", "")
+		if err := fs.Parse(args); err != nil {
+			t.Fatal(err)
+		}
+		return fs, n, b, s
+	}
+	t.Setenv("CXSR_TRIAGE_COUNT", "7")
+	t.Setenv("CXSR_INSECURE", "true")
+	t.Setenv("CXSR_REPO", "  o/r  ")
+
+	fs, n, b, s := newSet()
+	if err := applyEnvDefaults(fs); err != nil {
+		t.Fatal(err)
+	}
+	if *n != 7 || !*b || *s != "o/r" {
+		t.Errorf("env not applied: %d %v %q", *n, *b, *s)
+	}
+
+	// a flag given on the command line wins over the environment
+	fs, n, _, s = newSet("--triage-count", "2", "--repo=x/y")
+	if err := applyEnvDefaults(fs); err != nil {
+		t.Fatal(err)
+	}
+	if *n != 2 || *s != "x/y" {
+		t.Errorf("flag should win: %d %q", *n, *s)
+	}
+
+	// a blank variable is ignored; an invalid one is an error naming the variable
+	t.Setenv("CXSR_REPO", "   ")
+	fs, _, _, s = newSet()
+	if err := applyEnvDefaults(fs); err != nil || *s != "" {
+		t.Errorf("blank env: %v %q", err, *s)
+	}
+	t.Setenv("CXSR_TRIAGE_COUNT", "many")
+	fs, _, _, _ = newSet()
+	if err := applyEnvDefaults(fs); err == nil || !strings.Contains(err.Error(), "CXSR_TRIAGE_COUNT") {
+		t.Errorf("want an error naming CXSR_TRIAGE_COUNT, got %v", err)
+	}
+}
+
+// flag names are kebab-case and each has at least one environment variable
+func TestFlagEnvNamesAreKebabCase(t *testing.T) {
+	for name, envs := range flagEnv {
+		if name != strings.ToLower(name) || strings.ContainsAny(name, "_ ") {
+			t.Errorf("flag %q is not kebab-case", name)
+		}
+		if len(envs) == 0 {
+			t.Errorf("flag %q has no environment variable", name)
+		}
+	}
+}
+
+func TestApplyPollingOverrides(t *testing.T) {
+	vars := Cx1ClientGo.ClientVars{AIPollingDelaySeconds: 30, AIPollingMaxSeconds: 600, AIDetailsPollingDelaySeconds: 15, AIDetailsPollingMaxSeconds: 60}
+	if err := applyPollingOverrides(&vars, 0, 20*time.Minute, 1500*time.Millisecond, 0); err != nil {
+		t.Fatal(err)
+	}
+	if vars.AIPollingDelaySeconds != 30 || vars.AIPollingMaxSeconds != 1200 || vars.AIDetailsPollingDelaySeconds != 2 || vars.AIDetailsPollingMaxSeconds != 60 {
+		t.Errorf("unexpected %+v", vars)
+	}
+	if err := applyPollingOverrides(&vars, -time.Second, 0, 0, 0); err == nil {
+		t.Error("a negative duration must be rejected")
 	}
 }

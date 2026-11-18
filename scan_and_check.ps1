@@ -8,10 +8,14 @@
 # problem; 3 for a download or checksum failure.
 #
 # Configuration is the same as scan_and_check.sh (environment variables):
-#   required: PROJECT_NAME, BRANCH, CX_BASE_URI, GH_PR_PAT, and either CX_APIKEY or
+#   required: PROJECT_NAME, BRANCH, CX_BASE_URI, GITHUB_PR_TOKEN, and either CX_APIKEY or
 #             CX_BASE_AUTH_URI + CX_TENANT + CX_CLIENT_ID + CX_CLIENT_SECRET
-#   optional: GH_REPO_URL, CXSR_PROXY, CXSR_CACERT, CXSR_INSECURE, CXSR_LOGLEVEL,
-#             CXSR_TIMEOUT, CXSR_NO_KEEPALIVE, CXSR_VERSION, CX_CLI_VERSION
+#   optional: CXSR_REPO, CXSR_BASE_BRANCH, CXSR_TRIAGE_COUNT, CXSR_REMEDIATE_COUNT, CXSR_ENGINES,
+#             CXSR_SEVERITIES, CXSR_THRESHOLD, CXSR_LOG_LEVEL, CXSR_TIMEOUT, CXSR_PROXY,
+#             CXSR_CA_CERT, CXSR_INSECURE, CXSR_NO_KEEP_ALIVE, CXSR_KEEP_TEMP, CXSR_VERSION,
+#             CXSR_RELEASE_REPO, CX_CLI_VERSION, CXSR_WORKDIR
+#   The tool reads its CXSR_* settings from the environment itself (see the README); GITHUB_PR_TOKEN is
+#   deliberately not GITHUB_TOKEN, so that an ambient CI token is never used.
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -43,6 +47,7 @@ function Test-Flag([string]$Name) {
 # $script:Insecure come from the configuration.
 function Invoke-Download([string[]]$CurlArgs) {
     $a = @()
+    $a += @('--proto', '=https', '--proto-redir', '=https', '--tlsv1.2', '--retry', '3', '--retry-connrefused', '--connect-timeout', '30', '--max-time', '600')
     if ($script:Proxy) { $a += @('--proxy', $script:Proxy) }
     if ($script:CaCert) { $a += @('--cacert', $script:CaCert) }
     if ($script:Insecure) { $a += '-k' }
@@ -89,43 +94,42 @@ function Get-Architecture {
 function Invoke-Main {
     # --- Configuration -----------------------------------------------------
     # Credentials and endpoints use the CX_* variables the AST CLI reads natively, so they never
-    # appear on its command line. The older names (CX1_URL, IAM_URL, ...) are still accepted.
-    $map = @{
-        'CX_BASE_URI'      = @('CX_BASE_URI', 'CX1_URL')
-        'CX_BASE_AUTH_URI' = @('CX_BASE_AUTH_URI', 'IAM_URL')
-        'CX_TENANT'        = @('CX_TENANT', 'CX1_TENANT')
-        'CX_CLIENT_ID'     = @('CX_CLIENT_ID', 'CX1_CLIENT')
-        'CX_CLIENT_SECRET' = @('CX_CLIENT_SECRET', 'CX1_SECRET')
-        'CX_APIKEY'        = @('CX_APIKEY', 'CX1_APIKEY')
-    }
-    foreach ($k in $map.Keys) {
-        [Environment]::SetEnvironmentVariable($k, (Get-Env $map[$k]), 'Process')
-    }
-
+    # appear on its command line.
     foreach ($req in @(
             @('PROJECT_NAME', 'PROJECT_NAME is required'),
             @('BRANCH', 'BRANCH is required'),
-            @('CX_BASE_URI', 'CX_BASE_URI (or CX1_URL) is required'),
-            @('GH_PR_PAT', 'GH_PR_PAT is required (a token that can write to the target repository and raise pull requests)'))) {
+            @('CX_BASE_URI', 'CX_BASE_URI is required'),
+            @('GITHUB_PR_TOKEN', 'GITHUB_PR_TOKEN is required (a token that can write to the target repository and raise pull requests)'))) {
         if (-not (Get-Env @($req[0]))) { Stop-Script 2 $req[1] }
     }
     if (-not $env:CX_APIKEY) {
         foreach ($req in @(
-                @('CX_BASE_AUTH_URI', 'CX_BASE_AUTH_URI (or IAM_URL) is required unless CX_APIKEY is set'),
-                @('CX_TENANT', 'CX_TENANT (or CX1_TENANT) is required unless CX_APIKEY is set'),
-                @('CX_CLIENT_ID', 'CX_CLIENT_ID (or CX1_CLIENT) is required unless CX_APIKEY is set'),
-                @('CX_CLIENT_SECRET', 'CX_CLIENT_SECRET (or CX1_SECRET) is required unless CX_APIKEY is set'))) {
+                @('CX_BASE_AUTH_URI', 'CX_BASE_AUTH_URI is required unless CX_APIKEY is set'),
+                @('CX_TENANT', 'CX_TENANT is required unless CX_APIKEY is set'),
+                @('CX_CLIENT_ID', 'CX_CLIENT_ID is required unless CX_APIKEY is set'),
+                @('CX_CLIENT_SECRET', 'CX_CLIENT_SECRET is required unless CX_APIKEY is set'))) {
             if (-not (Get-Env @($req[0]))) { Stop-Script 2 $req[1] }
         }
     }
 
-    $ghRepoUrl = Get-Env @('GH_REPO_URL')
+    # Defaults for the tool, which reads these CXSR_* variables itself.
+    foreach ($d in @(
+            @('CXSR_TRIAGE_COUNT', '5'), @('CXSR_REMEDIATE_COUNT', '1'),
+            @('CXSR_ENGINES', 'sast,sca'), @('CXSR_SEVERITIES', 'CRITICAL,HIGH'),
+            @('CXSR_BASE_BRANCH', $env:BRANCH))) {
+        if (-not (Get-Env @($d[0]))) { [Environment]::SetEnvironmentVariable($d[0], $d[1], 'Process') }
+    }
+    $threshold = Get-Env @('CXSR_THRESHOLD')
+    if (-not $threshold) { $threshold = 'sast-critical=1;sast-high=1;sca-critical=1;sca-high=1;iac-security-critical=1;iac-security-high=1;api-security-critical=1;api-security-high=1;containers-critical=1;containers-high=1;sscs-secret-detection-critical=1;sscs-secret-detection-high=1;sscs-scorecard-critical=1;sscs-scorecard-high=1' }
+    $releaseRepo = Get-Env @('CXSR_RELEASE_REPO')
+    if (-not $releaseRepo) { $releaseRepo = 'cx-michael-kubiaczyk/cx1-scan-remediate' }
+
     $script:Proxy = Get-Env @('CXSR_PROXY')
-    $script:CaCert = Get-Env @('CXSR_CACERT')
+    $script:CaCert = Get-Env @('CXSR_CA_CERT')
     $script:Insecure = Test-Flag 'CXSR_INSECURE'
-    if ($script:Insecure -and $script:CaCert) { Stop-Script 2 'CXSR_INSECURE and CXSR_CACERT are mutually exclusive' }
+    if ($script:Insecure -and $script:CaCert) { Stop-Script 2 'CXSR_INSECURE and CXSR_CA_CERT are mutually exclusive' }
     if ($script:CaCert -and -not (Test-Path -LiteralPath $script:CaCert -PathType Leaf)) {
-        Stop-Script 2 "CXSR_CACERT file not found: $($script:CaCert)"
+        Stop-Script 2 "CXSR_CA_CERT file not found: $($script:CaCert)"
     }
     if (-not (Get-Command curl.exe -ErrorAction SilentlyContinue)) {
         Stop-Script 2 'curl.exe was not found; it ships with Windows 10 (1803+) and Windows Server 2019+'
@@ -141,8 +145,16 @@ function Invoke-Main {
     $cliPlatform = 'windows_x64'
     $toolAsset = 'cxscanremediate_windows_amd64.exe'
 
-    $workDir = Join-Path ([IO.Path]::GetTempPath()) ('cxsr-' + [Guid]::NewGuid().ToString('N'))
-    New-Item -ItemType Directory -Path $workDir | Out-Null
+    # A directory given in CXSR_WORKDIR is kept (it is the caller's); a temporary one is removed at the end.
+    $ownWorkDir = -not (Get-Env @('CXSR_WORKDIR'))
+    if ($ownWorkDir) {
+        $workDir = Join-Path ([IO.Path]::GetTempPath()) ('cxsr-' + [Guid]::NewGuid().ToString('N'))
+    } else {
+        $workDir = Get-Env @('CXSR_WORKDIR')
+    }
+    New-Item -ItemType Directory -Force -Path $workDir | Out-Null
+    # never mistake an earlier scan's report for this one's
+    Remove-Item -LiteralPath (Join-Path $workDir 'cx_result.json') -Force -ErrorAction SilentlyContinue
     try {
         # --- Scan ----------------------------------------------------------
         # Resolve the latest AST CLI release once and fetch both the archive and its checksums from
@@ -169,7 +181,7 @@ function Invoke-Main {
         $report = Join-Path $workDir 'cx_result.json'
 
         $cxArgs = @('scan', 'create', '--project-name', $env:PROJECT_NAME, '-s', '.', '--branch', $env:BRANCH,
-            '--threshold', 'sast-critical=1;sast-high=1;sca-critical=1;sca-high=1;iac-security-critical=1;iac-security-high=1;api-security-critical=1;api-security-high=1;containers-critical=1;containers-high=1;sscs-secret-detection-critical=1;sscs-secret-detection-high=1;sscs-scorecard-critical=1;sscs-scorecard-high=1',
+            '--threshold', $threshold,
             '--report-format', 'json', '--output-path', $workDir)
         if ($script:Insecure) { $cxArgs += '--insecure' }
         if ($script:Proxy) { $cxArgs += @('--proxy', $script:Proxy) }
@@ -197,10 +209,10 @@ function Invoke-Main {
         # The latest release of this tool unless CXSR_VERSION pins one (e.g. v0.0.11)
         $toolVersion = Get-Env @('CXSR_VERSION')
         if (-not $toolVersion) {
-            $toolVersion = Get-LatestTag 'cx-michael-kubiaczyk/cx1-scan-remediate'
+            $toolVersion = Get-LatestTag $releaseRepo
             if (-not $toolVersion) { Stop-Script $scanRc 'Could not determine the latest cxscanremediate release; the threshold failure stands' }
         }
-        $toolBase = "https://github.com/cx-michael-kubiaczyk/cx1-scan-remediate/releases/download/$toolVersion"
+        $toolBase = "https://github.com/$releaseRepo/releases/download/$toolVersion"
         $tool = Join-Path $workDir 'cxscanremediate.exe'
         try {
             Invoke-Download @('-fsSL', "$toolBase/$toolAsset", '-o', $tool)
@@ -210,27 +222,20 @@ function Invoke-Main {
         }
         Confirm-Checksum $tool (Join-Path $workDir 'tool_checksums.txt') $toolAsset
 
-        # Credentials are not passed as flags (they would show up in the process list). The tool
-        # reads the CX_* variables and GITHUB_TOKEN from the environment.
-        $toolArgs = @('-triage', '5', '-remediate', '1', '-input', $report, '-baseBranch', $env:BRANCH,
-            '-engine', 'sast,sca', '-severity', 'CRITICAL,HIGH')
-        # An empty argument would be dropped by Windows PowerShell 5.1, so -repo is only added when set
-        if ($ghRepoUrl) { $toolArgs += @('-repo', $ghRepoUrl) }
-        if ($script:Proxy) { $toolArgs += @('-proxy', $script:Proxy) }
-        $logLevel = Get-Env @('CXSR_LOGLEVEL')
-        if ($logLevel) { $toolArgs += @('-log', $logLevel) }
-        $timeout = Get-Env @('CXSR_TIMEOUT')
-        if ($timeout) { $toolArgs += @('-timeout', $timeout) }
-        if ($script:Insecure) { $toolArgs += '-insecure' }
-        if ($script:CaCert) { $toolArgs += @('-caCert', $script:CaCert) }
-        if (Test-Flag 'CXSR_NO_KEEPALIVE') { $toolArgs += '-noKeepAlive' }
+        # The tool reads its whole configuration from the environment (the CXSR_* variables
+        # above, CX_* and GITHUB_TOKEN), so nothing, least of all a credential, is on its
+        # command line, where the process list could show it. Only the report location is set here.
+        $toolArgs = @()
 
-        # GITHUB_TOKEN is set for the tool's process only. When an API key is used, the client
-        # credentials are removed from its environment so it never has two methods to choose from.
+        # GITHUB_TOKEN and the report location are set for the tool's process only. When an API
+        # key is used, the client credentials are removed from its environment so it never has
+        # two methods to choose from.
+        $oldReport = $env:CXSR_REPORT_FILE
+        $env:CXSR_REPORT_FILE = $report
         $oldToken = $env:GITHUB_TOKEN
         $oldId = $env:CX_CLIENT_ID
         $oldSecret = $env:CX_CLIENT_SECRET
-        $env:GITHUB_TOKEN = $env:GH_PR_PAT
+        $env:GITHUB_TOKEN = $env:GITHUB_PR_TOKEN
         if ($env:CX_APIKEY) {
             $env:CX_CLIENT_ID = $null
             $env:CX_CLIENT_SECRET = $null
@@ -239,6 +244,7 @@ function Invoke-Main {
             & $tool @toolArgs
             $toolRc = $LASTEXITCODE
         } finally {
+            $env:CXSR_REPORT_FILE = $oldReport
             $env:GITHUB_TOKEN = $oldToken
             $env:CX_CLIENT_ID = $oldId
             $env:CX_CLIENT_SECRET = $oldSecret
@@ -248,7 +254,7 @@ function Invoke-Main {
         if ($toolRc -ne 0) { exit $toolRc }
         exit $scanRc
     } finally {
-        Remove-Item -LiteralPath $workDir -Recurse -Force -ErrorAction SilentlyContinue
+        if ($ownWorkDir) { Remove-Item -LiteralPath $workDir -Recurse -Force -ErrorAction SilentlyContinue }
     }
 }
 

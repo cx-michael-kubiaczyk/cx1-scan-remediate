@@ -21,7 +21,7 @@ const useRefetchedStates = false
 // states do not match what AI Triage said (the result state may lag behind the triage job).
 const stateRetryDelay = 15 * time.Second
 
-// severityList turns the -severity set into the list the results filter takes, most severe first.
+// severityList turns the --severities set into the list the results filter takes, most severe first.
 func severityList(severities map[string]bool) []string {
 	list := make([]string, 0, len(severities))
 	for s := range severities {
@@ -34,7 +34,7 @@ func severityList(severities map[string]bool) []string {
 // resultsFetcher returns the scan's results as the platform currently has them.
 type resultsFetcher func() (Cx1ClientGo.ScanResultSet, error)
 
-// fetchResultsFor builds a resultsFetcher for one scan, limited to the -severity list. It has no
+// fetchResultsFor builds a resultsFetcher for one scan, limited to the --severities list. It has no
 // state filter, so findings whose state changed to anything are seen.
 func fetchResultsFor(cxclient *Cx1ClientGo.Cx1Client, scanID string, severities map[string]bool) resultsFetcher {
 	return func() (Cx1ClientGo.ScanResultSet, error) {
