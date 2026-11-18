@@ -4,6 +4,6 @@ cxscanremediate*
 test
 orig
 *.bat
-cx1-scan-remediate Code Review.md
+*Code Review*.md
 dist/
 *.log
