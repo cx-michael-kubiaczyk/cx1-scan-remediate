@@ -26,14 +26,14 @@ If their changes overlap, the second PR to be merged will show an ordinary merge
 A remediation is all-or-nothing: if any of its changes cannot be applied, no PR is created for it.
 
 ## Notes
-- By default the tool triages nothing (`-triage 0`) and remediates one finding (`-remediate 1`), to avoid using up AI credits; `scan_and_check.sh` / `scan_and_check.ps1` run it with `-triage 5 -remediate 1`. Both are configurable, see "AI credits" below.
-- AI Triage / AI Remediation requests are sent in batches of at most 5 findings (`-triageBatch` / `-remediationBatch`). `-triage` and `-remediate` are each limited to 25 per run, and a number above 5 is split into several batches. The batch limit of 5 is hard-coded as it is the size the AI backends are known to handle.
+- By default the tool triages nothing (`--triage-count 0`) and remediates one finding (`--remediate-count 1`), to avoid using up AI credits; `scan_and_check.sh` / `scan_and_check.ps1` run it with `CXSR_TRIAGE_COUNT=5` and `CXSR_REMEDIATE_COUNT=1`. Both are configurable, see "AI credits" below.
+- AI Triage / AI Remediation requests are sent in batches of at most 5 findings (`--triage-batch-size` / `--remediation-batch-size`). `--triage-count` and `--remediate-count` are each limited to 25 per run, and a number above 5 is split into several batches. The batch limit of 5 is hard-coded as it is the size the AI backends are known to handle.
 - Triage runs before remediation, and its outcome is taken into account (after triage the tool re-reads the scan's results from Checkmarx One, so the state it acts on is the one the platform reports, not the AI's own label; if that call fails, the findings keep their state from the scan report and none are remediated because of the triage): a To_Verify finding that triage moves to Confirmed or Urgent can be remediated in the same run, while any other finding left in To_Verify (or Not_Exploitable) is not remediated.
 
-A GitHub token is required when using -remediate; the tool exits before submitting anything to Checkmarx One if none is available.
+A GitHub token is required when `--remediate-count` is above 0; the tool exits before submitting anything to Checkmarx One if none is available.
 
 ## GitHub token permissions
-The token (`GH_PR_PAT` in the scripts, `-githubToken` or `GITHUB_TOKEN` for the tool) is used only against the repository that receives the pull requests. It needs to read the repository and its base branch, create a branch, commit the changed files to it, and open a pull request. Give it no more than that:
+The token (`GITHUB_PR_TOKEN` in the scripts, `--github-token` or `GITHUB_TOKEN` for the tool) is used only against the repository that receives the pull requests. It needs to read the repository and its base branch, create a branch, commit the changed files to it, and open a pull request. Give it no more than that:
 
 | Token type | Minimum permissions |
 | --- | --- |
@@ -47,19 +47,19 @@ Notes:
 - If branch protection or rulesets restrict who can create branches or open pull requests from branches matching the prefix, the token's owner must be allowed to.
 
 ## AI credits
-AI Triage and AI Remediation use AI credits from your Checkmarx One licence, so how many findings you process per run decides how quickly they are used. The tool processes the findings in priority order (most severe first), at most `-triage` and `-remediate` of them per run, and the run is still failed afterwards: nothing is cleared by it, a person reviews each pull request. There is a trade-off in how you set the numbers:
+AI Triage and AI Remediation use AI credits from your Checkmarx One licence, so how many findings you process per run decides how quickly they are used. The tool processes the findings in priority order (most severe first), at most `--triage-count` and `--remediate-count` of them per run, and the run is still failed afterwards: nothing is cleared by it, a person reviews each pull request. There is a trade-off in how you set the numbers:
 
 - **A few findings per run (the default for the scripts: 5 triaged, 1 remediated).** Credit use per pipeline run is small and predictable, and a developer gets one pull request at a time to review. Every run picks up where the last one stopped, because findings that already have a pull request branch are skipped and findings that triage moved out of To_Verify are not triaged again. A large backlog is therefore worked off over many runs, which is slow, and the pipeline keeps failing until the threshold is met.
-- **Many findings in one run (up to 25 of each).** The backlog shrinks faster and you get all the pull requests together, but one run can use a lot of credits, spends them even on findings nobody gets to review soon, takes longer (see `-timeout`), and produces several pull requests that may touch the same files and conflict with one another.
+- **Many findings in one run (up to 25 of each).** The backlog shrinks faster and you get all the pull requests together, but one run can use a lot of credits, spends them even on findings nobody gets to review soon, takes longer (see `--timeout`), and produces several pull requests that may touch the same files and conflict with one another.
 
 Suggestions:
-- Start with the script's defaults, check your AI credit usage in Checkmarx One after a few runs, and raise `-remediate` or `-triage` only if the usage and the review capacity allow it. The numbers are set in the script's call of the tool, so a customer who wants different values hosts their own copy of the script.
-- Restrict `-severity` (default Critical and High) and `-engine` (default SAST and SCA) to what you want fixed first.
+- Start with the script's defaults, check your AI credit usage in Checkmarx One after a few runs, and raise `CXSR_REMEDIATE_COUNT` or `CXSR_TRIAGE_COUNT` only if the usage and the review capacity allow it. They are plain environment variables, so no change to the script is needed.
+- Restrict `--severities` (default Critical and High) and `--engines` (default SAST and SCA) to what you want fixed first.
 - Re-running does not repeat work: a finding whose branch already exists is skipped, and findings that triage already moved out of To_Verify are not triaged again (a finding the platform leaves in To_Verify is eligible for triage in the next run). Delete the branch to have a finding retried.
-- `-timeout` (default 30 minutes) bounds how long a run waits for the AI. Work that has finished by then is still turned into pull requests, and the rest is abandoned.
+- `--timeout` (default 30 minutes) bounds how long a run waits for the AI. Work that has finished by then is still turned into pull requests, and the rest is abandoned.
 
 ## Repository URLs
-The repository comes from `-repo`, or from the `repoUrl` of the Checkmarx One project. It can be written as `owner/repo`, an HTTP(S) URL, or an SSH URL (`git@host:owner/repo.git` or `ssh://git@host[:port]/owner/repo.git`); anything after the owner and repository (such as `/tree/main`) is ignored, and an SSH port is not used for the API. Supported hosts:
+The repository comes from `--repo`, or from the `repoUrl` of the Checkmarx One project. It can be written as `owner/repo`, an HTTP(S) URL, or an SSH URL (`git@host:owner/repo.git` or `ssh://git@host[:port]/owner/repo.git`); anything after the owner and repository (such as `/tree/main`) is ignored, and an SSH port is not used for the API. Supported hosts:
 - github.com
 - GitHub Enterprise Server (`https://<host>/api/v3/`)
 - GitHub Enterprise Cloud with data residency (`<name>.ghe.com`, using `https://api.<host>/`)
@@ -84,114 +84,135 @@ Windows on arm64 is not supported.
 The scripts do the following:
 0. Detect the platform (Linux x86_64 or arm64; anything else stops with exit code 2)
 1. Download the latest Checkmarx One ast-cli (https://github.com/Checkmarx/ast-cli/releases), verify its SHA-256 against the checksums file published with that release (the script stops with exit code 3 on a mismatch), and unpack it
-2. Run a scan with all engines against the pipeline's source code using Checkmarx One, failing if there is any Critical or High result (thresholds are set per engine). The JSON report is written to the script's temporary work directory (`--output-path`), not the scanned source directory, so a stale report in a cached workspace can never be picked up, and the tool is given it with `-input`
-3. If the scan fails, it will download the cxscanremediate binary from this repository's releases
+2. Run a scan with all engines against the pipeline's source code using Checkmarx One, failing if there is any Critical or High result (thresholds are set per engine, see `CXSR_THRESHOLD`). The JSON report is written to the script's work directory (`--output-path`), not the scanned source directory, so a stale report in a cached workspace can never be picked up, and the tool is given it as `CXSR_REPORT_FILE`
+3. If the scan fails, it will download the cxscanremediate binary from this repository's releases, and verify its SHA-256
 4. Run the cxscanremediate tool to trigger Checkmarx One AI-Triage on up to 5 Critical/High SAST and SCA findings in the To_Verify state, then AI-Remediation on the most-severe Confirmed or Urgent finding (if any)
 5. Once a code-remediation is available, apply the code fix and raise a pull request against the original repository
 
-The script takes variables from the pipeline for each step (Checkmarx One URLs & credentials, Github URLs & PAT):
-- GH_PR_PAT: token allowing permission to write & raise PRs in the target repository
-- GH_REPO_URL: location of the target repository
+The scripts are configured with environment variables (from the pipeline). The tool reads its own settings from the environment too (every flag has a matching variable, see [Parameters](#parameters)), so the scripts pass it nothing on its command line, and no secret appears on one.
+
+Required:
+- GITHUB_PR_TOKEN: token allowing permission to write & raise PRs in the target repository (set as `GITHUB_TOKEN` for the tool's process only; it is deliberately not read from `GITHUB_TOKEN`, so an ambient CI token is never used for the pull requests)
 - BRANCH: PRs raised by this tool will target this branch + scans in Checkmarx One will be listed under this branch
 - PROJECT_NAME: scans in Checkmarx One will be created under this project
-- CX_BASE_URI: URL for the Checkmarx One instance eg: https://deu.ast.checkmarx.net (older name: CX1_URL)
-- CX_BASE_AUTH_URI: Authentication URL for the Checkmarx One instance eg: https://deu.iam.checkmarx.net (older name: IAM_URL)
-- CX_TENANT: Tenant in the Checkmarx One instance (older name: CX1_TENANT)
-- CX_CLIENT_ID: OIDC Client ID to use for connecting to Checkmarx One (older name: CX1_CLIENT)
-- CX_CLIENT_SECRET: OIDC Client Secret to use for connecting to Checkmarx One (older name: CX1_SECRET)
-- CX_APIKEY: Optional API key, used instead of the client ID/secret/tenant/IAM URL (older name: CX1_APIKEY)
-- CX_CLI_VERSION: Optional AST CLI release tag to use instead of the latest, e.g. 2.3.71
-- CXSR_VERSION: Optional cx-scan-remediate release tag to download, e.g. v0.0.11 (default: the latest release, as GitHub reports it - make sure each new release is marked "latest"); its SHA-256 is verified against the release's checksums.txt
-- CXSR_PROXY: Optional proxy URL (e.g. http://proxy.corp:8080) used for the downloads, the AST CLI and the cx-scan-remediate tool
-- CXSR_CACERT: Optional path to a PEM file with extra CA certificate(s) to trust, e.g. the CA of a TLS-inspecting proxy. Used for the downloads, the AST CLI (via SSL_CERT_FILE, which replaces the CLI's system roots) and the cx-scan-remediate tool (-caCert, which adds to the system roots)
-- CXSR_INSECURE: Optional; set to "true" to disable TLS certificate verification (not recommended; mutually exclusive with CXSR_CACERT)
-- CXSR_TIMEOUT: Optional overall time limit for AI Triage and AI Remediation as a duration, e.g. 45m (default: 30m; 0 for no limit)
-- CXSR_NO_KEEPALIVE: Optional; set to "true" to disable HTTP connection reuse in the cx-scan-remediate tool, for proxies that drop pooled connections (random EOF errors)
-- CXSR_LOGLEVEL: Optional Log level to use for output by the cx-scan-remediate tool (default: info)
-- CXSR_DEBUG: Optional Debugging flag to retain diffs generated by Checkmarx One AI-Remediation - diffs are stored in temporary files (eg: in /tmp/) and are deleted automatically if this field is empty. Note that the kept scratch directory (its path is logged) holds copies of the scanned source files that were patched, so delete it when done, especially on a shared agent
+- CX_BASE_URI: URL for the Checkmarx One instance eg: https://deu.ast.checkmarx.net
+- CX_BASE_AUTH_URI, CX_TENANT, CX_CLIENT_ID, CX_CLIENT_SECRET: authentication URL (eg: https://deu.iam.checkmarx.net), tenant and OIDC client ID/secret for Checkmarx One; or instead
+- CX_APIKEY: an API key (then the four above are not needed)
 
-The `CX_*` variables are the ones the AST CLI reads itself, so the scan never has them on its command line. The cx-scan-remediate tool reads them from the environment as well (and `GITHUB_TOKEN`, set from `GH_PR_PAT` for that process only), so no secret appears on a command line.
+Optional, for the tool (defaults in brackets; the same variables work when you run the tool directly):
+- CXSR_REPO: the target repository (owner/repo or a URL) [the Checkmarx One project's repoUrl]
+- CXSR_BASE_BRANCH: the branch the pull requests target [BRANCH]
+- CXSR_TRIAGE_COUNT [5], CXSR_REMEDIATE_COUNT [1]: how many findings to triage and remediate per run
+- CXSR_ENGINES [sast,sca], CXSR_SEVERITIES [CRITICAL,HIGH]: which findings the tool handles
+- CXSR_TIMEOUT: overall time limit for AI Triage and AI Remediation as a duration, e.g. 45m [30m; 0 for no limit]
+- CXSR_LOG_LEVEL: log level of the tool [info]
+- CXSR_AI_POLL_INTERVAL [30s], CXSR_AI_POLL_TIMEOUT [10m], CXSR_AI_DETAILS_POLL_INTERVAL [15s], CXSR_AI_DETAILS_POLL_TIMEOUT [1m]: how often and how long the tool polls for an AI job, and for its result details afterwards (the library's defaults); `CXSR_TIMEOUT` still bounds the whole run
+- CXSR_NO_KEEP_ALIVE: set to "true" to disable HTTP connection reuse in the tool, for proxies that drop pooled connections (random EOF errors)
+- CXSR_KEEP_TEMP: set to "true" to keep the scratch directory of each AI Remediation (copies of the patched source files and the diffs; its path is logged) instead of deleting it. It can hold customer source code, so delete it when done, especially on a shared agent
+
+Optional, for the scripts:
+- CXSR_THRESHOLD: the `--threshold` given to the scan [critical and high at 1 for each engine]
+- CX_CLI_VERSION: AST CLI release tag to use instead of the latest, e.g. 2.3.71
+- CXSR_VERSION: cx-scan-remediate release tag to download, e.g. v0.0.11 [the latest release, as GitHub reports it - make sure each new release is marked "latest"]; its SHA-256 is verified against the release's checksums.txt
+- CXSR_RELEASE_REPO: the GitHub repository (owner/name) to download the tool from, e.g. when your organization hosts its own release
+- CXSR_WORKDIR: a directory for the downloads and the report [a new temporary directory, removed on exit; a directory you give is kept]
+- CXSR_PROXY: proxy URL (e.g. http://proxy.corp:8080) used for the downloads, the AST CLI and the tool
+- CXSR_CA_CERT: path to a PEM file with extra CA certificate(s) to trust, e.g. the CA of a TLS-inspecting proxy. Used for the downloads, the AST CLI (via SSL_CERT_FILE, which replaces the CLI's system roots) and the tool (`--ca-cert`, which adds to the system roots)
+- CXSR_INSECURE: set to "true" to disable TLS certificate verification (not recommended; mutually exclusive with CXSR_CA_CERT)
+
+The downloads use curl with HTTPS only (also across redirects), TLS 1.2 or newer, 3 retries and time limits.
 
 The script exits non-zero whenever the scan breaks the threshold, whatever the AI steps do: AI Triage only ever proposes a state (a person still has to confirm it) and remediations are only pull requests. If the scan fails without producing a report (bad credentials, network error), the AST CLI's own exit code is returned.
 
 This tool is a Proof-of-Concept and has a number of limitations outlined below.
 
 # Parameters
+Every flag can also be set with the environment variable shown at the end of its description (shown as `[env: ...]`); a flag given on the command line wins over the environment. `-flag` and `--flag` are equivalent. The scripts configure the tool entirely through the environment.
 ## Auth
 ```
-  -apikey string
-        Checkmarx One API Key (if not using client id/secret; falls back to CX_APIKEY)
-  -client string
-        Checkmarx One Client ID (if not using API Key; falls back to CX_CLIENT_ID)
-  -cx string
-        Checkmarx One platform URL (falls back to CX_BASE_URI)
-  -githubToken string
-        GitHub token used to publish a pull request with the remediation changes (falls back to the GITHUB_TOKEN env var); required when using -remediate
-  -iam string
-        Checkmarx One IAM URL (falls back to CX_BASE_AUTH_URI)
-  -secret string
-        Checkmarx One Client Secret (if not using API Key; falls back to CX_CLIENT_SECRET)
-  -tenant string
-        Checkmarx One tenant (falls back to CX_TENANT)
-  -token string
+  --apikey string
+        Checkmarx One API Key (alternative to the client ID and secret) [env: CX_APIKEY]
+  --client-id string
+        Checkmarx One Client ID [env: CX_CLIENT_ID]
+  --client-secret string
+        Checkmarx One Client Secret [env: CX_CLIENT_SECRET]
+  --base-uri string
+        Checkmarx One platform URL, e.g. https://deu.ast.checkmarx.net [env: CX_BASE_URI]
+  --base-auth-uri string
+        Checkmarx One IAM (authentication) URL [env: CX_BASE_AUTH_URI]
+  --tenant string
+        Checkmarx One tenant [env: CX_TENANT]
+  --access-token string
         Optional: A valid access_token. If this value is provided, others will be ignored - the client will lose access when the token expires
 ```
-## Process       
+## Process
 ```
-  -baseBranch string
-        Branch to open the pull request against; defaults to the repository's default branch
-  -dir string
-        Path to the root of the source code that was scanned, used as the base that remediation diffs are applied to in memory (never modified) (default ".")
-  -engine string
-        Focus only on these engines - comma separated list from: sast,sca (default "sast,sca")
-  -input string
-        Path to JSON format report as generated by ast-cli --report-format json (default "cx_result.json")
-  -severity string
-        Focus only on results of these severities - comma separated list from: CRITICAL,HIGH,MEDIUM,LOW,INFO (default "CRITICAL,HIGH")
-  -triage int
-        Number of results to triage, sorted by highest-priority and resultId; at most 25 per run (default 0)
-  -triageBatch int
-        Number of results submitted to AI Triage together in one request (1-5) (default 5)
-  -prBranch string
-        Prefix for the names of the branches created for pull requests; each branch is this prefix plus the engine and result ID, e.g. cx-remediate/sast-<id> (default prefix "cx-remediate/"). A finding whose branch already exists was remediated by an earlier run and is skipped; delete the branch to retry
-  -remediate int
-        Number of results to remediate, sorted by highest-priority and resultId; at most 25 per run (default 1)
-  -remediationBatch int
-        Number of results submitted to AI Remediation together in one request (1-5) (default 5)
-  -repo string
-        Target GitHub repository (owner/repo, HTTP(S) URL, or SSH URL; GitHub.com, GitHub Enterprise Server or a *.ghe.com host) for the pull request; derived from the Checkmarx One project's repoUrl if omitted
+  --report-file string
+        Path to JSON format report as generated by ast-cli --report-format json [env: CXSR_REPORT_FILE] (default "cx_result.json")
+  --source-dir string
+        Path to the root of the source code that was scanned, used as the base that remediation diffs are applied to in memory (never modified) [env: CXSR_SOURCE_DIR] (default ".")
+  --engines string
+        Focus only on these engines - comma separated list from: sast,sca [env: CXSR_ENGINES] (default "sast,sca")
+  --severities string
+        Focus only on results of these severities - comma separated list from: CRITICAL,HIGH,MEDIUM,LOW,INFO [env: CXSR_SEVERITIES] (default "CRITICAL,HIGH")
+  --triage-count int
+        Number of results to triage, sorted by highest-priority and resultId [env: CXSR_TRIAGE_COUNT]
+  --triage-batch-size int
+        Number of results submitted to AI Triage together in one request (1-5) [env: CXSR_TRIAGE_BATCH_SIZE] (default 5)
+  --remediate-count int
+        Number of results to remediate, sorted by highest-priority and resultId [env: CXSR_REMEDIATE_COUNT] (default 1)
+  --remediation-batch-size int
+        Number of results submitted to AI Remediation together in one request (1-5) [env: CXSR_REMEDIATION_BATCH_SIZE] (default 5)
+  --github-token string
+        GitHub token used to publish a pull request with the remediation changes; required when --remediate-count is above 0 [env: GITHUB_TOKEN]
+  --repo string
+        Target GitHub repository (owner/repo, HTTP(S) URL, or SSH URL; GitHub.com, GitHub Enterprise Server or a *.ghe.com host) for the pull request; derived from the Checkmarx One project's repoUrl if omitted [env: CXSR_REPO]
+  --base-branch string
+        Branch to open the pull request against; defaults to the repository's default branch [env: CXSR_BASE_BRANCH]
+  --pr-branch string
+        Prefix for the names of the branches created for pull requests; each branch is this prefix plus the engine and result ID (default "cx-remediate/"). A finding whose branch already exists is skipped [env: CXSR_PR_BRANCH]
 ```
 
-## Misc  
+## Misc
 ```
-  -caCert string
-        Optional: Path to a PEM file with extra CA certificate(s) to trust for calls to Checkmarx One and GitHub, e.g. the CA of a TLS-inspecting proxy; added to the system trust store
-  -insecure
-        Optional: DISABLE TLS certificate verification for calls to Checkmarx One and GitHub (insecure; prefer -caCert)
-  -noKeepAlive
-        Optional: Disable HTTP connection reuse (a new connection per request); use if a proxy drops pooled connections and calls fail with random EOF errors
-  -proxy string
-        Optional: Proxy server (http, https or socks5 URL) for outbound calls to Checkmarx One and GitHub; defaults to the HTTPS_PROXY environment variable
-  -log string
-        Log level: TRACE, DEBUG, INFO, WARNING, ERROR, FATAL; any other value is rejected (default "INFO")
-  -timeout duration
-        Overall time limit for waiting on AI Triage and AI Remediation, e.g. 30m; 0 for no limit (default 30m0s). Work that completes in time is still published as pull requests; unfinished work is abandoned and the run exits non-zero
-  -useragent string
-        Optional: A custom user-agent string for all requests to Checkmarx One (default "cxscanremediate/<version>")
+  --ca-cert string
+        Optional: Path to a PEM file with extra CA certificate(s) to trust for calls to Checkmarx One and GitHub, e.g. the CA of a TLS-inspecting proxy; added to the system trust store [env: CXSR_CA_CERT]
+  --insecure
+        Optional: DISABLE TLS certificate verification for calls to Checkmarx One and GitHub (insecure; prefer --ca-cert) [env: CXSR_INSECURE]
+  --no-keep-alive
+        Optional: Disable HTTP connection reuse (a new connection per request); use if a proxy drops pooled connections and calls fail with random EOF errors [env: CXSR_NO_KEEP_ALIVE]
+  --proxy string
+        Optional: Proxy server (http, https or socks5 URL) for outbound calls to Checkmarx One and GitHub; defaults to the HTTPS_PROXY environment variable [env: CXSR_PROXY]
+  --log-level string
+        Log level: TRACE, DEBUG, INFO, WARNING, ERROR, FATAL [env: CXSR_LOG_LEVEL] (default "INFO")
+  --timeout duration
+        Overall time limit for waiting on AI Triage and AI Remediation, e.g. 30m; 0 for no limit. Work that completes in time is still published as pull requests; unfinished work is abandoned and the run exits non-zero [env: CXSR_TIMEOUT] (default 30m0s)
+  --ai-poll-interval duration
+        Optional: How often to ask whether an AI Triage or AI Remediation job has finished, e.g. 30s (default: the library's, 30s) [env: CXSR_AI_POLL_INTERVAL]
+  --ai-poll-timeout duration
+        Optional: The longest to wait for one finding's AI Triage or AI Remediation job, e.g. 10m (default: the library's, 10m); --timeout still bounds the whole run [env: CXSR_AI_POLL_TIMEOUT]
+  --ai-details-poll-interval duration
+        Optional: How often to retry fetching the result details of a finished AI job, e.g. 15s (default: the library's, 15s) [env: CXSR_AI_DETAILS_POLL_INTERVAL]
+  --ai-details-poll-timeout duration
+        Optional: The longest to keep retrying that fetch, e.g. 1m (default: the library's, 1m) [env: CXSR_AI_DETAILS_POLL_TIMEOUT]
+  --keep-temp
+        Optional: Keep the scratch directory of each AI Remediation (copies of the patched source files and diffs) instead of deleting it; its path is logged. It can hold customer source code, so delete it when done [env: CXSR_KEEP_TEMP]
+  --user-agent string
+        Optional: A custom user-agent string for all requests to Checkmarx One [env: CXSR_USER_AGENT] (default "cxscanremediate/dev")
 ```
 
 ## Exit codes
 | Code | Meaning |
 | --- | --- |
 | 1 | The run completed and findings above the threshold remain. This is the normal result: AI Triage only proposes a state and remediation only opens a pull request, so the pipeline must still fail. |
-| 2 | Invalid command line (unknown engine or log level, negative count, `-remediate` without a GitHub token, ...). Checked before anything is sent to Checkmarx One. |
+| 2 | Invalid command line (unknown engine or log level, negative count, `--remediate-count` without a GitHub token, ...). Checked before anything is sent to Checkmarx One. |
 | 3 | An operational error: an API, patch, pull request or timeout failure, or a fatal error. |
 
 Before exiting (with any of the codes above once the report has been read), the tool logs a summary of the results in the scan report that still count against the threshold, per engine, for example:
 
 `Results from the scan report still counting against the threshold (...): SAST 3, SCA 12, Secret Detection 1 (not handled by this tool)`
 
-The summary counts results in the report whose severity is in `-severity` and whose state is not `NOT_EXPLOITABLE` (`PROPOSED_NOT_EXPLOITABLE` still counts, as a person has to confirm it). Engines this tool cannot triage or remediate, and result types the Cx1ClientGo library does not know ("Unknown"), are marked "not handled by this tool", so a threshold break caused only by, say, IaC or Secret Detection findings is easy to recognise. It approximates the AST CLI's threshold from the state recorded in the report: it does not change when this run triages findings or opens pull requests, and it only matches the pipeline's gate when `-severity` matches the threshold (the script uses Critical and High).
+The summary counts results in the report whose severity is in `--severities` and whose state is not `NOT_EXPLOITABLE` (`PROPOSED_NOT_EXPLOITABLE` still counts, as a person has to confirm it). Engines this tool cannot triage or remediate, and result types the Cx1ClientGo library does not know ("Unknown"), are marked "not handled by this tool", so a threshold break caused only by, say, IaC or Secret Detection findings is easy to recognise. It approximates the AST CLI's threshold from the state recorded in the report: it does not change when this run triages findings or opens pull requests, and it only matches the pipeline's gate when `-severity` matches the threshold (the script uses Critical and High).
 
 The summary is preceded by three lines about what this run did with the findings it handles: what AI Triage concluded (the states the platform now reports for the findings it triaged), how many remediations were requested and pull requests opened (and how many Confirmed/Urgent findings were skipped because their branch already exists), and what is still waiting for a later run (To_Verify findings not yet triaged, Confirmed/Urgent findings not yet remediated). Together they show why the pipeline still fails and how far along the backlog is.
 

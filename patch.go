@@ -46,8 +46,8 @@ func applyRemediationInMemory(logger *logrus.Logger, details Cx1ClientGo.AIRemed
 		return nil, fmt.Errorf("failed to create scratch directory: %w", err)
 	}
 	defer func() {
-		if os.Getenv("CXSR_DEBUG") != "" {
-			logger.Infof("Scratch directory kept (CXSR_DEBUG is set): %s", root)
+		if *keepTemp {
+			logger.Infof("Scratch directory kept (--keep-temp): %s", root)
 		} else {
 			os.RemoveAll(root)
 		}
@@ -230,3 +230,7 @@ func cleanRepoPath(p string) (string, error) {
 	}
 	return clean, nil
 }
+
+// keepTemp is the --keep-temp flag: keep each remediation's scratch directory, which holds copies
+// of the patched source files and the diffs, instead of deleting it.
+var keepTemp = new(bool)

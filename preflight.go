@@ -59,7 +59,7 @@ func checkRepoAccess(ctx context.Context, client *github.Client, owner, repo, ba
 		baseBranch = r.GetDefaultBranch()
 	}
 	if baseBranch == "" {
-		return "", configErrorf("could not determine a base branch for %s/%s; pass -baseBranch", owner, repo)
+		return "", configErrorf("could not determine a base branch for %s/%s; pass --base-branch", owner, repo)
 	}
 
 	if _, resp, err := client.Git.GetRef(ctx, owner, repo, "refs/heads/"+baseBranch); err != nil {
@@ -72,7 +72,7 @@ func checkRepoAccess(ctx context.Context, client *github.Client, owner, repo, ba
 	return baseBranch, nil
 }
 
-// resolveRepoRef returns the repository to raise pull requests against: the -repo value, or
+// resolveRepoRef returns the repository to raise pull requests against: the --repo value, or
 // else the repoUrl configured on the Checkmarx One project.
 func resolveRepoRef(cxclient *Cx1ClientGo.Cx1Client, scan *Cx1ClientGo.Scan, repoFlag string) (string, error) {
 	if repoFlag != "" {
@@ -83,7 +83,7 @@ func resolveRepoRef(cxclient *Cx1ClientGo.Cx1Client, scan *Cx1ClientGo.Scan, rep
 		return "", fmt.Errorf("failed to look up project %s to determine its repository: %w", scan.ProjectID, err)
 	}
 	if project.RepoUrl == "" {
-		return "", configErrorf("the Checkmarx One project has no repoUrl configured and -repo was not provided")
+		return "", configErrorf("the Checkmarx One project has no repoUrl configured and --repo was not provided")
 	}
 	return project.RepoUrl, nil
 }
@@ -96,7 +96,7 @@ func preflightPR(ctx context.Context, logger *logrus.Logger, cxclient *Cx1Client
 		return pr, configErrorf("git was not found on PATH; it is needed to apply remediation diffs")
 	}
 	if fi, err := os.Stat(sourceDir); err != nil || !fi.IsDir() {
-		return pr, configErrorf("-dir %q is not a readable directory", sourceDir)
+		return pr, configErrorf("--source-dir %q is not a readable directory", sourceDir)
 	}
 
 	repoRef, err := resolveRepoRef(cxclient, scan, pr.Repo)

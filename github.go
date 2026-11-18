@@ -239,7 +239,7 @@ type prOptions struct {
 
 // branchFor names the branch for a finding's pull request. The name depends only on the
 // finding, so the same finding always gets the same branch and a later run can tell it has
-// already been remediated. -prBranch is always a prefix, joined to the finding with "-" (or
+// already been remediated. --pr-branch is always a prefix, joined to the finding with "-" (or
 // directly, if the prefix already ends in "/" or "-").
 func branchFor(pr prOptions, f *resultIndex) string {
 	prefix := cmp.Or(pr.Branch, defaultBranchPrefix)
