@@ -50,7 +50,10 @@ function Invoke-Download([string[]]$CurlArgs) {
     $a += @('--proto', '=https', '--proto-redir', '=https', '--tlsv1.2', '--retry', '3', '--retry-connrefused', '--connect-timeout', '30', '--max-time', '600')
     if ($script:Proxy) { $a += @('--proxy', $script:Proxy) }
     if ($script:CaCert) { $a += @('--cacert', $script:CaCert) }
-    if ($script:Insecure) { $a += '-k' }
+    if ($script:Insecure) {
+        $a += '-k'
+        if ($script:Proxy) { $a += '--proxy-insecure' }  # -k does not cover an HTTPS proxy's own certificate
+    }
     $a += $CurlArgs
     & curl.exe @a
     if ($LASTEXITCODE -ne 0) { throw "curl.exe failed with exit code $LASTEXITCODE" }
