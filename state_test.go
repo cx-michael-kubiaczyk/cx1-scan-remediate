@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 
@@ -142,8 +143,41 @@ func TestAITriageState(t *testing.T) {
 		{"EXPLOITABLE", "NOT_REACHABLE", "PROPOSED_NOT_EXPLOITABLE"},
 		{"false_positive", "REACHABLE", "TO_VERIFY"}, // not a state: keeps the fallback
 	} {
-		if got := aiTriageState(logger, "t", c.exploitability, c.reachability, "TO_VERIFY"); got != c.want {
+		a := aiAssessment{Exploitability: c.exploitability, Reachability: c.reachability}
+		if got := aiTriageState(logger, "t", a, "TO_VERIFY"); got != c.want {
 			t.Errorf("aiTriageState(%s, %s) = %s, want %s", c.exploitability, c.reachability, got, c.want)
 		}
+	}
+}
+
+// the SAST API bug: triageStatus TO_VERIFY with exploitability NOT_EXPLOITABLE / attackability NOT_ATTACKABLE
+func TestAITriageStateSASTInconsistency(t *testing.T) {
+	var buf bytes.Buffer
+	logger := logrus.New()
+	logger.SetOutput(&buf)
+	for _, c := range []struct {
+		name string
+		a    aiAssessment
+		want string
+		warn bool
+	}{
+		{"to_verify, not exploitable and not attackable", aiAssessment{"TO_VERIFY", "REACHABLE", "NOT_EXPLOITABLE", "NOT_ATTACKABLE"}, "PROPOSED_NOT_EXPLOITABLE", true},
+		{"to_verify, only not attackable", aiAssessment{"TO_VERIFY", "REACHABLE", "", "NOT_ATTACKABLE"}, "PROPOSED_NOT_EXPLOITABLE", true},
+		{"to_verify, only not exploitable", aiAssessment{"TO_VERIFY", "REACHABLE", "NOT_EXPLOITABLE", ""}, "PROPOSED_NOT_EXPLOITABLE", true},
+		{"to_verify, exploitable and attackable", aiAssessment{"TO_VERIFY", "REACHABLE", "EXPLOITABLE", "ATTACKABLE"}, "TO_VERIFY", false},
+		{"to_verify, nothing else said", aiAssessment{Exploitability: "TO_VERIFY", Reachability: "REACHABLE"}, "TO_VERIFY", false},
+		{"confirmed despite not exploitable: warn, keep", aiAssessment{"CONFIRMED", "REACHABLE", "NOT_EXPLOITABLE", "NOT_ATTACKABLE"}, "CONFIRMED", true},
+	} {
+		buf.Reset()
+		if got := aiTriageState(logger, "t", c.a, "TO_VERIFY"); got != c.want {
+			t.Errorf("%s: got %s, want %s", c.name, got, c.want)
+		}
+		if warned := strings.Contains(buf.String(), "API inconsistency"); warned != c.warn {
+			t.Errorf("%s: warned=%v, want %v (%q)", c.name, warned, c.warn, buf.String())
+		}
+	}
+	// the parked re-read path expects the same state
+	if got := expectedStates(aiAssessment{"TO_VERIFY", "REACHABLE", "NOT_EXPLOITABLE", "NOT_ATTACKABLE"}); !slices.Contains(got, "PROPOSED_NOT_EXPLOITABLE") {
+		t.Errorf("expectedStates = %v", got)
 	}
 }

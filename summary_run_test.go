@@ -7,9 +7,9 @@ import (
 
 func TestDescribeRun(t *testing.T) {
 	index := []resultIndex{
-		{Engine: "sca", AlternateID: "t1", State: "PROPOSED_NOT_EXPLOITABLE", AI: &aiAssessment{"NOT_EXPLOITABLE", "REACHABLE"}},
-		{Engine: "sca", AlternateID: "t2", State: "PROPOSED_NOT_EXPLOITABLE", AI: &aiAssessment{"NOT_EXPLOITABLE", "NOT_REACHABLE"}},
-		{Engine: "sca", AlternateID: "t3", State: "CONFIRMED", AI: &aiAssessment{"EXPLOITABLE", "REACHABLE"}},
+		{Engine: "sca", AlternateID: "t1", State: "PROPOSED_NOT_EXPLOITABLE", AI: &aiAssessment{Exploitability: "NOT_EXPLOITABLE", Reachability: "REACHABLE"}},
+		{Engine: "sca", AlternateID: "t2", State: "PROPOSED_NOT_EXPLOITABLE", AI: &aiAssessment{Exploitability: "NOT_EXPLOITABLE", Reachability: "NOT_REACHABLE"}},
+		{Engine: "sca", AlternateID: "t3", State: "CONFIRMED", AI: &aiAssessment{Exploitability: "EXPLOITABLE", Reachability: "REACHABLE"}},
 		{Engine: "sca", AlternateID: "v1", State: "TO_VERIFY"},  // not triaged yet
 		{Engine: "sca", AlternateID: "v2", State: "TO_VERIFY"},  // not triaged yet
 		{Engine: "sast", AlternateID: "c1", State: "CONFIRMED"}, // remediation requested

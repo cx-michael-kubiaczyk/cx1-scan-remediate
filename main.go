@@ -550,7 +550,7 @@ func triageBatchOf(cxclient *Cx1ClientGo.Cx1Client, logger *logrus.Logger, scan 
 			logger.Infof("AI Triage results: exploitability %s, reachability %s", details.Analysis.Exploitability.Status, details.Analysis.Reachability.Status)
 			finding.AI = &aiAssessment{Exploitability: details.Analysis.Exploitability.Status, Reachability: details.Analysis.Reachability.Status}
 			if !useRefetchedStates {
-				finding.State = aiTriageState(logger, "AI Triage of "+finding.String(), details.Analysis.Exploitability.Status, details.Analysis.Reachability.Status, finding.State)
+				finding.State = aiTriageState(logger, "AI Triage of "+finding.String(), *finding.AI, finding.State)
 			}
 			continue
 		}
@@ -560,10 +560,10 @@ func triageBatchOf(cxclient *Cx1ClientGo.Cx1Client, logger *logrus.Logger, scan 
 			logger.Warnf("Could not get the AI Triage assessment for %s: %s", finding, err)
 			continue
 		}
-		logger.Infof("AI Triage results: %s (reachability %s)", details.TriageStatus, details.ReachabilityStatus)
-		finding.AI = &aiAssessment{Exploitability: details.TriageStatus, Reachability: details.ReachabilityStatus}
+		logger.Infof("AI Triage results: %s (reachability %s, exploitability %s, attackability %s)", details.TriageStatus, details.ReachabilityStatus, details.ExploitabilityStatus, details.AttackabilityStatus)
+		finding.AI = &aiAssessment{Exploitability: details.TriageStatus, Reachability: details.ReachabilityStatus, ExploitabilityStatus: details.ExploitabilityStatus, AttackabilityStatus: details.AttackabilityStatus}
 		if !useRefetchedStates {
-			finding.State = aiTriageState(logger, "AI Triage of "+finding.String(), details.TriageStatus, details.ReachabilityStatus, finding.State)
+			finding.State = aiTriageState(logger, "AI Triage of "+finding.String(), *finding.AI, finding.State)
 		}
 	}
 }
